@@ -23,7 +23,9 @@ env:
   # File/line backtraces without full debug info: smaller target, faster cache.
   CARGO_PROFILE_DEV_DEBUG: "1"
   CARGO_PROFILE_TEST_DEBUG: "1"
-  SAVE_CACHES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+  CARGO_INCREMENTAL: "0"
+  # EXPERIMENT: this PR saves too, to measure warm runs. Remove before merge.
+  SAVE_CACHES: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.head_ref == 'ci/cache-experiment' }}
 
 jobs:
   platform-tests:
@@ -51,12 +53,19 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.16.0
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The whole target/, like release.yml: rust-cache drops the vendored crates.
+      - name: Restore build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          key: ${{ matrix.platform }}-dev
-          cache-workspace-crates: true
-          cache-bin: false
-          save-if: ${{ env.SAVE_CACHES }}
+          path: &cache-paths |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ci-v1-${{ matrix.platform }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ci-v1-${{ matrix.platform }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-
+            ci-v1-${{ matrix.platform }}-${{ env.RUST_TOOLCHAIN }}-
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -68,10 +77,21 @@ jobs:
       - name: Windows build dependencies
         if: runner.os == 'Windows'
         run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - name: Keep unchanged sources fresh
+        run: scripts/ci-sources restore
       # Compile the screenshot harness everywhere, even without a desktop.
       # Disable optimized dev dependencies in CI to reduce test compile time.
       - name: Build tests
         run: cargo test --locked --config 'profile.dev.package."*".opt-level=0' --no-run
+      - name: Note the sources the cache was built from
+        if: env.SAVE_CACHES == 'true'
+        run: scripts/ci-sources record
+      - name: Save build cache
+        if: env.SAVE_CACHES == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cache-paths
+          key: ci-v1-${{ matrix.platform }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
       - name: Tests
         run: |
           only=()
