@@ -12,7 +12,8 @@ are maintained in the private `Volpestyle/dotfiles` repository under
 
 The browser has an address/search bar, back/forward, reload, persistent website
 storage, new-window links opening as Herdr tabs, downloads, and Chromium's
-inspector. CEF owns the native child view, compositor, input and Retina scaling;
+inspector. Native panes use CEF's Chrome runtime style for Web Store extension
+support. CEF owns the native child view, compositor, input and Retina scaling;
 there is no screenshot stream or CPU image-upload loop. Browser profiles live
 under `~/.config/herdr-app-browser/chromium` and downloads under
 `~/.config/herdr-app-browser/downloads`. Website JavaScript has no bridge to
@@ -146,6 +147,8 @@ and all helpers. These declarations permit normal macOS permission prompts;
 they do not grant a website access. Other authentication paths have not all
 been exercised. Physical keyboard
 shortcuts and comparative CPU/GPU performance have not been benchmarked.
+The [extension runtime PR](https://github.com/Volpestyle/herdr-app/pull/1)
+reports successful 1Password installation and its inline menu in browser panes.
 
 ## Current limits
 
@@ -155,7 +158,10 @@ across tab switches, but recreating it starts at the original URL; history is
 not restored after restarting the app. Remote-space browsing runs locally.
 External protocol navigation is blocked. Popup URLs currently open in a new
 Herdr tab; flows that require a preserved `window.opener` may need further work.
-The browser does not include Chrome extensions or Chrome's password-manager UI.
+Extension-created tabs can open in separate Chrome windows, and extension
+toolbar-popup placement is not yet integrated into the Herdr pane controls.
+Broader extension compatibility has not been verified. Keep a local profile
+backup before switching an existing Alloy-runtime profile to Chrome style.
 GPUI's `shot` capture omits native child views; Chromium DevTools screenshots
 were used for native rendering evidence.
 
