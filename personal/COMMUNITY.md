@@ -22,10 +22,10 @@ Herdr community guide. Private Discord history was not searched.
   The search found no PR for the same native CEF integration into this app;
   absence from these search results is not proof that no one else has one.
 
-Our implementation embeds native Chromium/CEF child views in the official
-desktop app's Rust/GPUI code, with a small menu mod. It is an unofficial fork,
-currently tested on Apple silicon macOS. James confirmed Google sign-in to
-Linear works after the privacy-declaration packaging fix. Comparative
+This fork embeds native Chromium/CEF child views in the upstream desktop app's
+Rust/GPUI code, with a small menu mod. It is currently tested on macOS on Apple
+silicon. Manual testing confirmed Google sign-in to Linear after the
+privacy-declaration packaging fix. Comparative
 performance, other platforms and complete browser feature coverage are untested.
 
 The project's [contribution guide](../CONTRIBUTING.md) recommends

@@ -1,14 +1,13 @@
-# Herdr Browser: James's personal build
+# Herdr Browser
 
 Open `~/Applications/Herdr Browser.app`, then choose **+ → Browser**. The
 `herdr-browser` CLI addresses this custom app; `herdr-app` still addresses the
-stock installation. The current fork embeds native Chromium through CEF in
-Herdr's Rust/GPUI shell. It follows Orca's browser architecture without adding
-an Electron shell or using a terminal browser.
+stock installation. Native Chromium is integrated through CEF in Herdr's
+Rust/GPUI shell.
 
-Source backup: [Volpestyle/herdr-app](https://github.com/Volpestyle/herdr-app),
-branch `james/native-browser`. James's appearance and keyboard configuration
-live separately in the private `Volpestyle/dotfiles` repository under
+Source: [Volpestyle/herdr-app](https://github.com/Volpestyle/herdr-app),
+branch `james/native-browser`. Optional appearance and keyboard customizations
+are maintained in the private `Volpestyle/dotfiles` repository under
 `config/herdr-app-browser`. See [moving to another Mac](ANOTHER-MAC.md).
 
 The browser has an address/search bar, back/forward, reload, persistent website
@@ -26,8 +25,8 @@ tabs while a webpage owns keyboard focus. Native copy/paste/select-all and
 undo/redo stay in the webpage. Cmd+Shift+I opens Chromium's inspector.
 
 The first install copies the existing appearance, personal mods and keys into
-`~/.config/herdr-app-browser`, including James's Ghostty wallpaper. Subsequent
-updates preserve that configuration. Both applications use the existing
+`~/.config/herdr-app-browser`. Subsequent updates preserve that configuration.
+Both applications use the existing
 herdr-core session unless `HC_SESSION` selects another one. Browser engine
 replacement uses a new Chromium profile; existing Safari/WebKit sign-ins are
 not imported.
@@ -54,8 +53,7 @@ camera and microphone usage declarations; packaging fails if any is missing.
 Compiles have a 30-minute limit; app tests run serially with a two-minute
 limit. A timeout stops only that updater-owned build process tree. This keeps
 an occasional filesystem-watcher test stall from hanging the watcher.
-No CI jobs or evals are added. No token, webhook host or additional paid update
-service is required.
+Update checks use public release feeds; builds run locally.
 
 The staged build installs once Herdr Browser closes. Updates retain the previous
 bundle for rollback and never quit the working app themselves. Patch conflicts,
@@ -64,17 +62,16 @@ failed candidate is not rebuilt repeatedly. Compatibility changes can still
 require a manual patch repair; the installed working version is retained.
 The stock binary updater is disabled so it cannot overwrite the custom build.
 
-The updater uses the existing personal Apple Development signing identity
-selected by the ignored `.local/browser-updater/signing_identity` file. The
-public certificate was verified as James Volpe's personal identity. If it is
-renewed or unavailable, update that file to the appropriate valid personal
-identity; signing failures preserve the working app. Do not replace stable
-signing with an ad-hoc signature for unattended updates: Keychain may require
+The updater uses a stable Apple Development signing identity selected by the
+ignored `.local/browser-updater/signing_identity` file. Configure a valid
+identity available on the build machine and update the selection when its
+certificate is renewed. Signing failures preserve the working app. Do not
+replace stable signing with an ad-hoc signature for unattended updates: Keychain may require
 new authorization when the trusted code identity changes.
 
 Chromium uses a dedicated **Herdr Browser Personal Safe Storage** Keychain
 service/account, separate from other Chromium applications. No existing
-browser Keychain entries or credentials are read or migrated by our tooling.
+browser Keychain entries or credentials are read or migrated by the setup tools.
 Chromium itself encrypts its profile using that key. The continuity test used
 two different signed builds with an identical certificate-based requirement;
 an encrypted persistent test cookie survived the update without approving any
@@ -118,8 +115,8 @@ herdr-browser-update install
 The CEF build script downloads the matching SDK into the configured versioned
 cache. The packager obtains that exact SDK path from the compiled helper,
 copies its framework/helpers/credits, and signs the result. Cargo preserves
-the upstream lockfile and resolves the dependencies our patch adds. The saved
-patch excludes the lockfile and personal updater; it includes new browser
+the upstream lockfile and resolves the dependencies added by the browser patch.
+The saved patch excludes the lockfile and personal updater; it includes new browser
 source files. `snapshot` does not stage, commit, reset, or rewrite this working
 checkout.
 
@@ -139,8 +136,8 @@ pointer/key input or close another app. The preview has a separate bundle ID.
 
 Linear's public login page renders the normal Google/email/SSO/passkey choices
 in Chromium with a 993×658 CSS-pixel viewport at devicePixelRatio=2. The former
-WebKit build showed an incompatible-browser warning. James confirmed that
-Google sign-in to Linear works on 2026-10-30. Google sign-in initially exposed
+WebKit build showed an incompatible-browser warning. Manual testing confirmed
+Google sign-in to Linear on 2026-10-30. That flow initially exposed
 a packaging omission: passkey discovery requested Bluetooth without an
 `NSBluetoothAlwaysUsageDescription`, so macOS TCC terminated the app. The
 packager now includes and validates the browser usage descriptions on the app

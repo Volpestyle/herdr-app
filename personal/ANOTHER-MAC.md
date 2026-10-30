@@ -1,8 +1,9 @@
 # Herdr Browser on another Mac
 
-This build is for macOS on Apple silicon. The browser code is backed up in
-`Volpestyle/herdr-app` on `james/native-browser`. The portable appearance is in
-James's private `Volpestyle/dotfiles`, under `config/herdr-app-browser`.
+This build targets macOS on Apple silicon. The source is maintained in
+`Volpestyle/herdr-app` on `james/native-browser`. The optional appearance profile
+is maintained separately in the private `Volpestyle/dotfiles` repository under
+`config/herdr-app-browser`.
 
 ## Copy the tested app
 
@@ -26,7 +27,7 @@ ditto -x -k ~/Downloads/Herdr-Browser-apple-silicon.zip ~/Applications
 codesign --verify --deep --strict "$HOME/Applications/Herdr Browser.app"
 ```
 
-This is a personal development-signed build, not a notarized public release.
+This build is development-signed and is not notarized for public distribution.
 macOS or the work Mac's management policy may require approval to open it.
 The portable bundle selects the current account's `~/.config/herdr-app-browser`;
 it has no baked-in `/Users/james` path. Sign in to websites normally on this Mac.

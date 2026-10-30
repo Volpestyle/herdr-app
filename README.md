@@ -1,9 +1,14 @@
 # Herdr
 
-This is James's unofficial macOS Apple silicon fork with native Chromium/CEF
-browser tabs. See [browser features and update mechanism](personal/README.md),
-[moving to another Mac](personal/ANOTHER-MAC.md), and
-[related community work](personal/COMMUNITY.md). The upstream Herdr guide follows.
+This fork adds native Chromium/CEF browser tabs to Herdr's Rust/GPUI desktop
+app. The current build targets macOS on Apple silicon.
+
+[Features and automatic updates](personal/README.md) ·
+[Installation and migration](personal/ANOTHER-MAC.md) ·
+[Related projects](personal/COMMUNITY.md)
+
+The guide below describes upstream Herdr. Its installation commands install
+the upstream app; follow the installation guide above for this fork.
 
 Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
 
