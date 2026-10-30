@@ -46,9 +46,26 @@ pub fn note_fonts(cx: &gpui::App) {
 
 /// The app's home: `$HERDR_APP_HOME` (tests, experiments), else
 /// `$XDG_CONFIG_HOME/herdr-app`, else `~/.config/herdr-app`, on every OS.
+/// The personal browser bundle uses `~/` so it can move between Mac accounts.
 pub fn app_dir() -> PathBuf {
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    env("HERDR_APP_HOME").unwrap_or_else(|| env("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config")).join("herdr-app"))
+    env("HERDR_APP_HOME").map(|path| expand_app_home(&path, &home()))
+        .unwrap_or_else(|| env("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config")).join("herdr-app"))
+}
+
+fn expand_app_home(path: &Path, home: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(relative) => home.join(relative),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+#[test]
+fn app_home_moves_with_the_current_mac_account() {
+    assert_eq!(expand_app_home(Path::new("~/.config/herdr-app-browser"), Path::new("/Users/work")), PathBuf::from("/Users/work/.config/herdr-app-browser"));
+    assert_eq!(expand_app_home(Path::new("/tmp/isolated"), Path::new("/Users/work")), PathBuf::from("/tmp/isolated"));
+    assert_eq!(expand_app_home(Path::new("relative/home"), Path::new("/Users/work")), PathBuf::from("relative/home"));
+    assert_eq!(expand_app_home(Path::new("~someone/home"), Path::new("/Users/work")), PathBuf::from("~someone/home"));
 }
 
 pub fn mods_dir() -> PathBuf {

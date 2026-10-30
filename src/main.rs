@@ -3,6 +3,7 @@
 
 mod bench;
 mod commands;
+mod browser;
 mod control;
 mod core_bin;
 mod files;
@@ -147,9 +148,16 @@ fn main() {
         eprintln!("herdr-app: cannot write {}: {e}", mods::app_dir().display());
     }
 
+    #[cfg(target_os = "macos")]
+    if let Err(error) = browser::runtime::prepare() {
+        tracing::error!("Chromium unavailable: {error:#}");
+    }
+
     gpui_platform::application()
         .with_assets(gpui_shell::AppAssets::new(mods::app_dir()))
         .run(move |cx| {
+            #[cfg(target_os = "macos")]
+            if let Err(error) = browser::runtime::start() { tracing::error!("Chromium initialization failed: {error:#}"); }
             let fonts = settings::BUNDLED_FONTS.iter().map(|f| std::borrow::Cow::Borrowed(*f)).collect();
             if let Err(e) = cx.text_system().add_fonts(fonts) {
                 tracing::warn!("bundled fonts not loaded: {e:#}");

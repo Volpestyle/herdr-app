@@ -280,6 +280,7 @@ struct Copy {
     /// Its number for commands (`mods::prepare_load`); 0 if it never loaded.
     id: u64,
     root: Option<Entity<ShellRoot>>,
+    browser: Option<Entity<crate::browser::Browser>>,
     _watch: Option<Watcher>,
     error: Option<String>,
 }
@@ -1396,7 +1397,7 @@ impl AppWindow {
         let want: HashMap<String, Instance> = mods_visible.into_iter().collect();
         for (slot, inst) in want {
             if !self.copies.contains_key(&slot) {
-                let copy = self.load(inst, window, cx);
+                let copy = self.load(inst, &slot, window, cx);
                 if slot.starts_with("float:")
                     && let Some(root) = &copy.root
                 {
@@ -1437,7 +1438,14 @@ impl AppWindow {
             // A mod pane takes the keyboard on a click; until then the window holds
             // it, so another tab's terminal can't keep it (and pull its tab back).
             if no_dialog {
-                focused.and_then(|p| self.pane_focus(&p)).unwrap_or_else(|| self.focus.clone()).focus(window, cx);
+                if let Some(browser) = focused.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.as_ref()) {
+                    // Clear the previous terminal's GPUI focus before the native
+                    // responder takes over, or render() selects that terminal again.
+                    self.focus.focus(window, cx);
+                    browser.read(cx).focus_page();
+                } else {
+                    focused.and_then(|p| self.pane_focus(&p)).unwrap_or_else(|| self.focus.clone()).focus(window, cx);
+                }
             }
         }
         if self.window_active {
@@ -1454,6 +1462,8 @@ impl AppWindow {
     /// reload), it goes to the top dialog, else the shown agent or focused pane,
     /// else the window, where the app's keys work.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A native web page owns an AppKit responder rather than a GPUI handle.
+        if self.overlays.is_empty() && self.copies.values().any(|c| c.browser.as_ref().is_some_and(|b| b.read(cx).is_focused())) { return; }
         let dialog = self.overlays.iter().rev().find(|o| o.kind.modal_keys()).map(|o| o.focus.clone());
         let shown = if terminal_block(&self.chrome, self.focused_pane.as_deref()).is_some() {
             self.focused_pane.as_deref().and_then(|p| self.pane_focus(p))
@@ -1483,8 +1493,12 @@ impl AppWindow {
         self.pane_term(pane).map(|t| t.focus.clone())
     }
 
-    fn load(&self, inst: Instance, window: &mut Window, cx: &mut Context<Self>) -> Copy {
-        let mut copy = Copy { inst, id: 0, root: None, _watch: None, error: None };
+    fn load(&self, inst: Instance, slot: &str, window: &mut Window, cx: &mut Context<Self>) -> Copy {
+        let mut copy = Copy { inst, id: 0, root: None, browser: None, _watch: None, error: None };
+        if copy.inst.name == crate::browser::MOD {
+            copy.browser = Some(cx.new(|cx| crate::browser::Browser::new(slot, &copy.inst.props, window, cx)));
+            return copy;
+        }
         let (Some(runtime), Some(folder)) = (&self.runtime, self.folders.get(&copy.inst.name)) else {
             copy.error = Some(format!("no mod folder ~/.config/herdr-app/mods/{}", copy.inst.name));
             return copy;
@@ -2623,6 +2637,27 @@ impl AppWindow {
     fn dispatch(&mut self, name: &str, a: &Value, person: bool, window: &mut Window, cx: &mut Context<Self>) {
         let active_ctx = self.model.active_tab().map(|c| c.id.clone());
         match name {
+            // Native browser panes reuse the existing mod-pane document format.
+            "browser.open" => {
+                let url = match crate::browser::address(Self::arg(a, "url").unwrap_or("https://www.google.com")) {
+                    Ok(url) => url, Err(error) => return self.fail(error),
+                };
+                let props = json!({"url":url});
+                let result = match Self::arg(a, "place") {
+                    Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
+                    Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
+                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), Self::arg(a, "name").unwrap_or("Browser"), crate::browser::MOD.into(), props),
+                    _ => Err("place must be tab, right, or down".into()),
+                };
+                self.answer(result);
+            }
+            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" => {
+                let pane = Self::owned(a, "pane").or_else(|| self.model.focused_pane());
+                let view = pane.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.clone());
+                let Some(view) = view else { return self.fail("Focus a native browser pane or pass its pane id"); };
+                let result = view.update(cx, |v, cx| v.command(name, a, window, cx));
+                self.answer(result);
+            }
             // ---- spaces
             "space.new" => {
                 let name = Self::arg(a, "name").unwrap_or_default();
@@ -3251,7 +3286,7 @@ impl AppWindow {
             focus.focus(window, cx);
         }
         if layout.is_none() {
-            let copy = self.load(Instance { name, props }, window, cx);
+            let copy = self.load(Instance { name, props }, &slot, window, cx);
             // Popups (menus) are as tall as what's in them; `height` is the most.
             if fit
                 && let Some(root) = &copy.root
@@ -3783,6 +3818,7 @@ impl AppWindow {
         // keyboard is its own (an editor, a board), like a terminal's.
         let in_pane = self.model.tab_of(slot).is_some();
         match self.copies.get(slot) {
+            Some(Copy { browser: Some(browser), .. }) => div().size_full().key_context("Browser").child(browser.clone()).into_any_element(),
             Some(Copy { root: Some(root), inst, .. }) => div()
                 .size_full()
                 .key_context(format!("Mod mod = {}", inst.name).as_str())
@@ -4419,6 +4455,13 @@ impl Render for AppWindow {
         let _timed = crate::bench::timed(&crate::bench::WINDOW_US);
         crate::bench::frame_start();
         crate::terminal::next_frame();
+        // Native child views must not cover hidden tabs or GPUI menus/dialogs.
+        let (_, visible_mods) = self.visible();
+        let visible_browsers: HashSet<_> = visible_mods.into_iter().filter(|(_, i)| i.name == crate::browser::MOD).map(|(s, _)| s).collect();
+        let unobscured = self.overlays.is_empty() && self.pane_drag.is_none();
+        for (slot, copy) in &self.copies {
+            if let Some(browser) = &copy.browser { browser.read(cx).set_allowed(unobscured && visible_browsers.contains(slot)); }
+        }
         window.set_rem_size(px(settings::ui_font_size()));
         // A terminal the person clicked into becomes the focused pane.
         let clicked = self

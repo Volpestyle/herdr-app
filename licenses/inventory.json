@@ -191,6 +191,13 @@
       "files": [
         "LICENSE"
       ]
+    },
+    {
+      "name": "Chromium Embedded Framework (native browser runtime)",
+      "source": "CEF 156.0.14+g4fa4ab5+chromium-156.0.8078.48; https://github.com/chromiumembedded/cef/tree/4fa4ab5; bundled Chromium third-party notices are in Contents/Resources/Chromium-Credits.html",
+      "files": [
+        "licenses/CEF.txt"
+      ]
     }
   ]
 }

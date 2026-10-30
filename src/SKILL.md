@@ -120,3 +120,21 @@ Never experiment with pointer/key automation on the person's real display.
 When developing the app on Linux, its `scripts/sandbox` provides an isolated
 home, core and display: `up`, `do`, `status`, `shot`, then `down` when done.
 Never stop a server or session you didn't start.
+
+
+## Native browser (personal Herdr Browser build, macOS)
+
+`browser.open {url?, space?, name?, place?: "tab" | "right" | "down", pane?}`
+opens a native Chromium/CEF browser, using the existing `native-browser` mod-pane identity.
+The + menu's Browser item uses it. It runs on this Mac even in a remote space.
+`browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
+`browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`
+and `browser.inspect {pane?}` address the focused browser or an explicit pane.
+HTTP/HTTPS, localhost addresses and search queries work; website JavaScript has
+no access to the privileged Herdr mod runtime. Cmd+L selects the address bar;
+Cmd+Shift+[ / ] switch Herdr tabs even while the native page holds focus.
+Browser documents stay alive across tab switches; closing their pane destroys
+the native view. With the current GPUI backend, pages are temporarily hidden
+while app menus/dialogs are open so native views cannot cover those controls.
+Personal build updates are managed by `herdr-browser-update`, not the stock
+Herdr binary updater. See `personal/README.md` in the fork.

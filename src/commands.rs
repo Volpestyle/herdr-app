@@ -28,6 +28,14 @@ const fn cmd(name: &'static str, args: &'static [Arg], about: &'static str) -> C
 }
 
 pub const COMMANDS: &[Command] = &[
+    cmd("browser.open", &[opt("url"), opt("space"), opt("name"), opt("place"), opt("pane")], "Open a native browser tab, or split right/down. Browsing runs on this Mac."),
+    cmd("browser.navigate", &[req("url"), opt("pane")], "Navigate the focused native browser, or a named pane."),
+    cmd("browser.back", &[opt("pane")], "Go back in a native browser."),
+    cmd("browser.forward", &[opt("pane")], "Go forward in a native browser."),
+    cmd("browser.reload", &[opt("pane")], "Reload a native browser page."),
+    cmd("browser.focus_url", &[opt("pane")], "Focus and select a native browser's address bar."),
+    cmd("browser.inspect", &[opt("pane")], "Inspect native browser loading state, URL, title and bounds."),
+    cmd("browser.devtools", &[opt("pane")], "Open Chromium's developer inspector for a native browser."),
     // What exists.
     cmd("space.new", &[opt("name"), opt("folder"), opt("tab"), opt("argv"), opt("task"), opt("machine")],
         "Make a space: its name (default: none, so it's called after where its first terminal is), the folder its terminals start in (default: the focused terminal's), its first tab's name (default: none, so it's called by its number), optionally an agent (argv) and its first message (task), and the machine it lives on (`hc machine ls`; default this one; its terminals start in that machine's home unless folder)."),

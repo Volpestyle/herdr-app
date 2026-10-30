@@ -26,7 +26,7 @@ export default class NewMenu extends View {
     const installed = this.agents.filter(a => a.installed);
     const choices = [...installed, ...this.agents.filter(a => !a.installed).slice(0, 2)];
     const mod = window()?.platform === "macos" ? "⌘" : "Ctrl";
-    return v_flex().min_h(0).w_full().h(Math.min(491, 167 + Math.max(1, choices.length) * 31)).bg(t.popover).p(5).text_size(12.8)
+    return v_flex().min_h(0).w_full().h(Math.min(491, 198 + Math.max(1, choices.length) * 31)).bg(t.popover).p(5).text_size(12.8)
       .id("new-menu").track_focus(this.handle)
       .on_key_down((e) => {
         if (!e.modifiers.control && !e.modifiers.platform) return;
@@ -38,6 +38,7 @@ export default class NewMenu extends View {
         else run("space.new");
       })
       .child(this.row("terminal", svg("icons/shell.svg").size(14), "Terminal", () => run("tab.new", { space: space?.id }), `${mod} T`))
+      .child(this.row("browser", svg("mods/native-browser/browser.svg").size(14), "Browser", () => run("browser.open", { space: space?.id })))
       .child(div().px(9).pt(8).pb(4).text_size(11).text_color(t.dim).child("Start an agent"))
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
         .children(choices.map((a, i) => this.row(a.key, a.tint ? svg(a.icon).size(14).text_color(t.foreground) : image(a.icon).size(14), a.name,

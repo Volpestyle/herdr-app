@@ -1,5 +1,10 @@
 # Herdr
 
+This is James's unofficial macOS Apple silicon fork with native Chromium/CEF
+browser tabs. See [browser features and update mechanism](personal/README.md),
+[moving to another Mac](personal/ANOTHER-MAC.md), and
+[related community work](personal/COMMUNITY.md). The upstream Herdr guide follows.
+
 Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
 
 ## Install

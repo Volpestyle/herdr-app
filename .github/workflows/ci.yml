@@ -9,6 +9,8 @@ on:
     branches: [master]
   # No paths-ignore here: CI is required to merge, so every PR needs it.
   pull_request:
+  # The personal fork runs native builds only on explicit manual requests.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,6 +29,7 @@ env:
 
 jobs:
   platform-tests:
+    if: github.repository == 'herdrdev/herdr-app' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
