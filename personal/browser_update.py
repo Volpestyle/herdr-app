@@ -30,7 +30,7 @@ UPSTREAM = 'https://github.com/herdrdev/herdr-app.git'
 ENGINE_FEED = 'https://crates.io/api/v1/crates/cef'
 LABEL = 'dev.james.herdr-browser-updater'
 FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs', 'src/mods.rs',
-                 'src/browser.rs', 'src/browser', 'src/SKILL.md', 'defaults/AGENTS.md',
+                 'src/browser.rs', 'src/browser', 'src/terminal.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
                  'defaults/mods/new-menu', 'defaults/mods/native-browser',
                  'licenses/CEF.txt', 'licenses/inventory.json']
 
@@ -318,9 +318,15 @@ def build_candidate(tag, state, *, force=False, engine=None):
             environment['ZIG'] = str(ensure_zig(tree))
             environment['CARGO_TARGET_DIR'] = str(ROOT / 'target')
             environment['CEF_PATH'] = str(Path.home() / '.local/share/herdr-browser/cef')
+            # xcrun can pick a Command Line Tools SDK newer than the selected Xcode's linker.
+            developer = Path(run(['xcode-select', '-p'], capture=True).stdout.decode().strip())
+            sdk = developer / 'Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'
+            if sdk.exists(): environment.setdefault('SDKROOT', str(sdk))
             # Cargo preserves upstream's lockfile and resolves only what the patch adds.
             with logfile.open('a', buffering=1) as child_log:
                 build_step(['cargo', 'build', '--release', '--bins'], cwd=tree, env=environment,
+                           output=child_log, timeout=1800)
+                build_step(['cargo', 'test', '--locked', '--bin', 'herdr-app', '--no-run'], cwd=tree, env=environment,
                            output=child_log, timeout=1800)
                 build_step(['cargo', 'test', '--locked', '--bin', 'herdr-app', '--', '--test-threads=1'], cwd=tree, env=environment,
                            output=child_log, timeout=120)
@@ -421,6 +427,9 @@ def write_launchers():
     launcher.write_text('#!/bin/sh\n' + f'export HERDR_APP_HOME="{APP_HOME}"\n' +
                         f'exec "{APP}/Contents/MacOS/HerdrBrowser" "$@"\n')
     launcher.chmod(0o755)
+    opener = folder / 'herdr-browser-open'
+    opener.write_text('#!/bin/sh\nfor url in "$@"; do "' + str(launcher) + '" do browser.open --url "$url"; done\n')
+    opener.chmod(0o755)
     updater = folder / 'herdr-browser-update'
     updater.write_text('#!/bin/sh\n' + f'exec "{sys.executable}" "{Path(__file__).resolve()}" "$@"\n')
     updater.chmod(0o755)
