@@ -21,7 +21,8 @@ Herdr's privileged mod runtime. Chromium's renderer/GPU helpers are sandboxed.
 Remote debugging is disabled unless `HERDR_BROWSER_DEBUG_PORT` explicitly
 selects a local development port.
 
-Cmd+L selects the address bar, Cmd+R reloads, and Cmd+Shift+[ / ] cycle all Herdr
+Cmd+Option+B opens a browser tab; Cmd+B toggles the sidebar. Cmd+L selects the
+address bar, Cmd+R reloads, and Cmd+Shift+[ / ] cycle all Herdr
 tabs while a webpage owns keyboard focus. Native copy/paste/select-all and
 undo/redo stay in the webpage. Cmd+Shift+I opens Chromium's inspector.
 

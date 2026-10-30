@@ -159,7 +159,13 @@ fn focused(container: &NSView, window: &NSWindow) -> bool {
     }
     false
 }
-fn shortcut(key: &str, shift: bool) -> Option<&'static str> {
+fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
+    if option {
+        return match (key, shift) {
+            ("b", false) => Some("browser.open"),
+            _ => None,
+        };
+    }
     match (key, shift) {
         ("[" | "{", true) => Some("tab.prev"),
         ("]" | "}", true) => Some("tab.next"),
@@ -167,6 +173,7 @@ fn shortcut(key: &str, shift: bool) -> Option<&'static str> {
         ("]", false) => Some("browser.forward"),
         ("l", false) => Some("browser.focus_url"),
         ("r", false) => Some("browser.reload"),
+        ("b", false) => Some("layout.toggle:sidebar"),
         ("t", false) => Some("browser.open"),
         ("w", false) => Some("tab.close"),
         ("p", true) => Some("app.palette"),
@@ -273,7 +280,7 @@ impl Host {
             }
             let flags = e.modifierFlags();
             if !flags.contains(NSEventModifierFlags::Command)
-                || flags.intersects(NSEventModifierFlags::Option | NSEventModifierFlags::Control)
+                || flags.contains(NSEventModifierFlags::Control)
             {
                 return event.as_ptr();
             }
@@ -282,14 +289,18 @@ impl Host {
                 .map(|s| s.to_string().to_lowercase())
                 .unwrap_or_default();
             let shift = flags.contains(NSEventModifierFlags::Shift);
+            let option = flags.contains(NSEventModifierFlags::Option);
             // App navigation remains available before a page has a focused frame.
-            if let Some(command) = shortcut(&key, shift) {
+            if let Some(command) = shortcut(&key, shift, option) {
                 let _ = tx.try_send(if command == "browser.focus_url" {
                     Event::FocusUrl
                 } else {
                     Event::Command(command)
                 });
                 return std::ptr::null_mut();
+            }
+            if option {
+                return event.as_ptr();
             }
             if let Some(cell) = weak.upgrade() {
                 if let Some(frame) = cell.borrow().as_ref().and_then(|b| b.focused_frame()) {
@@ -453,10 +464,17 @@ mod tests {
     use super::shortcut;
     #[test]
     fn shifted_brackets_always_switch_herdr_tabs() {
-        assert_eq!(shortcut("[", true), Some("tab.prev"));
-        assert_eq!(shortcut("{", true), Some("tab.prev"));
-        assert_eq!(shortcut("]", true), Some("tab.next"));
-        assert_eq!(shortcut("}", true), Some("tab.next"));
-        assert_eq!(shortcut("[", false), Some("browser.back"));
+        assert_eq!(shortcut("[", true, false), Some("tab.prev"));
+        assert_eq!(shortcut("{", true, false), Some("tab.prev"));
+        assert_eq!(shortcut("]", true, false), Some("tab.next"));
+        assert_eq!(shortcut("}", true, false), Some("tab.next"));
+        assert_eq!(shortcut("[", false, false), Some("browser.back"));
+    }
+    #[test]
+    fn browser_and_sidebar_shortcuts_match_the_global_keymap() {
+        let keys: serde_json::Value = serde_json::from_str(include_str!("../../defaults/keys.macos.json")).unwrap();
+        assert_eq!(shortcut("b", false, false), keys["global"]["cmd-b"].as_str());
+        assert_eq!(shortcut("b", false, true), keys["global"]["cmd-alt-b"].as_str());
+        assert_eq!(shortcut("l", false, true), None);
     }
 }

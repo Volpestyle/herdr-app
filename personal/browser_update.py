@@ -32,6 +32,7 @@ LABEL = 'dev.james.herdr-browser-updater'
 FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs', 'src/mods.rs',
                  'src/browser.rs', 'src/browser', 'src/terminal.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
                  'defaults/mods/new-menu', 'defaults/mods/native-browser',
+                 'defaults/keys.macos.json',
                  'licenses/CEF.txt', 'licenses/inventory.json']
 
 
@@ -396,7 +397,7 @@ def install_pending(state):
     candidate = Path(pending['bundle'])
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', candidate])
     migrate_config()
-    if not promote(candidate):
+    if not promote(candidate, APP):
         state['status'] = 'staged'
         print('Validated update is staged; the working app stays in place until it closes.')
         write_json(LOCAL / 'state.json', state)
@@ -406,6 +407,7 @@ def install_pending(state):
     state['pending'] = None
     state['status'] = 'installed'
     write_json(LOCAL / 'state.json', state)
+    write_launchers()
     print(f'Installed Herdr Browser {pending["tag"]}')
 
 

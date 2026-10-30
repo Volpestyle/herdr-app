@@ -35,6 +35,7 @@
     "cmd-/": "app.help",
     "cmd-shift-/": "app.help",
     "cmd-b": "layout.toggle:sidebar",
+    "cmd-alt-b": "browser.open",
     "cmd-=": "app.zoom_in",
     "cmd-+": "app.zoom_in",
     "cmd--": "app.zoom_out",

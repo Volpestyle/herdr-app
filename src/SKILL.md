@@ -144,6 +144,7 @@ and `browser.inspect {pane?}` address the focused browser or an explicit pane.
 HTTP/HTTPS, localhost addresses and search queries work; website JavaScript has
 no access to the privileged Herdr mod runtime. Cmd+L selects the address bar;
 Cmd+Shift+[ / ] switch Herdr tabs even while the native page holds focus.
+Cmd+Option+B opens a browser tab; Cmd+B toggles the sidebar.
 Browser documents stay alive across tab switches; closing their pane destroys
 the native view. With the current GPUI backend, pages are temporarily hidden
 while app menus/dialogs are open so native views cannot cover those controls.

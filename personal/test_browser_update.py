@@ -92,6 +92,32 @@ class PatchTests(unittest.TestCase):
 
 
 class PromotionTests(unittest.TestCase):
+    def test_automatic_install_writes_a_working_browser_opener(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); home = root / 'home'; app = home / 'Applications/Herdr Browser.app'
+            candidate = root / 'Candidate.app'
+            binary = candidate / 'Contents/MacOS/HerdrBrowser'; binary.parent.mkdir(parents=True)
+            binary.write_text('#!' + sys.executable + '\nimport json, os, sys\nfrom pathlib import Path\nPath(os.environ["LINK_CAPTURE"]).write_text(json.dumps({"argv": sys.argv[1:], "home": os.environ["HERDR_APP_HOME"]}))\n')
+            binary.chmod(0o755)
+            app_home = home / '.config/herdr-app-browser'; app_home.mkdir(parents=True)
+            local = root / 'updater'
+            state = {'pending': {'bundle': str(candidate), 'tag': 'v0.1.10'}}
+            fake = subprocess.CompletedProcess([], 0, stdout=b'')
+            with patch.object(updater.Path, 'home', return_value=home), \
+                 patch.object(updater, 'APP', app), patch.object(updater, 'APP_HOME', app_home), \
+                 patch.object(updater, 'LOCAL', local), patch.object(updater, 'run', return_value=fake):
+                updater.install_pending(state)
+            self.assertEqual(state['status'], 'installed')
+            opener = home / '.local/bin/herdr-browser-open'
+            url = 'https://example.test/search?q=hello world&mode=inline'
+            capture = root / 'link.json'
+            import os
+            env = dict(os.environ, LINK_CAPTURE=str(capture))
+            subprocess.run([str(opener), url], env=env, check=True)
+            actual = json.loads(capture.read_text())
+            self.assertEqual(actual['argv'], ['do', 'browser.open', '--url', url])
+            self.assertEqual(actual['home'], str(app_home))
+
     def test_config_migration_preserves_source_and_runs_only_once(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); source = root / 'stock'; target = root / 'browser'
