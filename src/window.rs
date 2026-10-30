@@ -1370,6 +1370,13 @@ impl AppWindow {
             let (block, addr) = (id.clone(), address.clone());
             let sub = cx.subscribe_in(&view, window, move |this, _, ev: &TerminalEvent, window, cx| match ev {
                 TerminalEvent::Peek(address) => this.peek_terminal(address, window, cx),
+                TerminalEvent::Browse { url, beside } => {
+                    let args = match beside {
+                        true => json!({ "url": url, "place": "right", "pane": block.trim_end_matches(SWAP) }),
+                        false => json!({ "url": url }),
+                    };
+                    this.run_as("browser.open", args, true, window, cx);
+                }
                 TerminalEvent::TitleChanged => this.publish(cx),
                 TerminalEvent::Ended => this.terminal_ended(&block, window, cx),
                 TerminalEvent::ContextMenu(at) => {

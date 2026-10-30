@@ -34,6 +34,8 @@ enum LinkTarget {
 
 pub enum TerminalEvent {
     Peek(String),
+    /// A web link clicked with the link key: a browser tab, or beside this pane with Shift.
+    Browse { url: String, beside: bool },
     TitleChanged,
     /// The program ended.
     Ended,
@@ -656,8 +658,8 @@ fn paste_image_bytes(format: ImageFormat, bytes: &[u8]) -> Option<(ImageFormat, 
 }
 
 fn link_mods(m: &Modifiers) -> bool {
-    let key = if cfg!(target_os = "macos") { m.platform && !m.control } else { m.control && !m.platform };
-    key && !m.alt && !m.shift
+    let key = if cfg!(target_os = "macos") { m.platform != m.control } else { m.control && !m.platform };
+    key && !m.alt
 }
 
 fn local(g: &Grid, p: Point<Pixels>) -> (f32, f32) {
@@ -1223,6 +1225,9 @@ impl Render for TerminalView {
                     && let Some((target, _)) = this.link_at(ev.position)
                 {
                     match target {
+                        LinkTarget::External(links::Target::Url(url)) if url.starts_with("http://") || url.starts_with("https://") => {
+                            cx.emit(TerminalEvent::Browse { url, beside: ev.modifiers.shift })
+                        }
                         LinkTarget::External(target) => links::open(&target),
                         LinkTarget::Terminal(address) => cx.emit(TerminalEvent::Peek(address)),
                     }

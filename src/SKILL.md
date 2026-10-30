@@ -124,6 +124,14 @@ Never stop a server or session you didn't start.
 
 ## Native browser (personal Herdr Browser build, macOS)
 
+When `$HERDR_BROWSER` is set you are running inside Herdr Browser: always
+show web pages in its native browser, never the system browser, Chrome or a
+terminal browser. `herdr-browser do browser.open --url <url>` opens a tab;
+add `--place right --pane <your pane id from herdr-browser ls>` to open it
+beside you. `$BROWSER` points at `herdr-browser-open`, so tools that open
+URLs land there too. Cmd/Ctrl-click on a link in a terminal opens a browser
+tab, and adding Shift opens it beside that pane.
+
 `browser.open {url?, space?, name?, place?: "tab" | "right" | "down", pane?}`
 opens a native Chromium/CEF browser, using the existing `native-browser` mod-pane identity.
 The + menu's Browser item uses it. It runs on this Mac even in a remote space.
