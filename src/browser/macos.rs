@@ -208,7 +208,7 @@ impl Host {
         container.setHidden(true);
         parent.addSubview(&container);
         let info = WindowInfo {
-            runtime_style: RuntimeStyle::ALLOY,
+            runtime_style: RuntimeStyle::CHROME,
             ..Default::default()
         }
         .set_as_child(
