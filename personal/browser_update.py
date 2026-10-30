@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -437,14 +438,15 @@ def write_launchers():
     folder = Path.home() / '.local/bin'
     folder.mkdir(parents=True, exist_ok=True)
     launcher = folder / 'herdr-browser'
-    launcher.write_text('#!/bin/sh\n' + f'export HERDR_APP_HOME="{APP_HOME}"\n' +
-                        f'exec "{APP}/Contents/MacOS/HerdrBrowser" "$@"\n')
+    launcher.write_text('#!/bin/sh\nexport HERDR_APP_HOME=' + shlex.quote(str(APP_HOME)) + '\nexec ' +
+                        shlex.quote(str(APP / 'Contents/MacOS/HerdrBrowser')) + ' "$@"\n')
     launcher.chmod(0o755)
     opener = folder / 'herdr-browser-open'
-    opener.write_text('#!/bin/sh\nfor url in "$@"; do "' + str(launcher) + '" do browser.open --url "$url"; done\n')
+    opener.write_text('#!/bin/sh\nexec ' + shlex.join([sys.executable, str(ROOT / 'personal/browser_open.py'),
+                      '--launcher', str(launcher), '--app', str(APP), '--']) + ' "$@"\n')
     opener.chmod(0o755)
     updater = folder / 'herdr-browser-update'
-    updater.write_text('#!/bin/sh\n' + f'exec "{sys.executable}" "{Path(__file__).resolve()}" "$@"\n')
+    updater.write_text('#!/bin/sh\nexec ' + shlex.join([sys.executable, str(Path(__file__).resolve())]) + ' "$@"\n')
     updater.chmod(0o755)
 
 

@@ -21,6 +21,16 @@ Herdr's privileged mod runtime. Chromium's renderer/GPU helpers are sandboxed.
 Remote debugging is disabled unless `HERDR_BROWSER_DEBUG_PORT` explicitly
 selects a local development port.
 
+Local terminals started by this fork receive `HERDR_BROWSER=1` and
+`BROWSER=herdr-browser-open`. When the app is closed, the opener applies any
+validated pending update and starts Herdr Browser, then opens each URL through
+the native app API. Shared agent instructions in
+dotfiles select this browser for webpages and previews, including older Herdr
+sessions identified by `HC_TERMINAL_ID`. Existing processes cannot inherit new
+environment variables; start a fresh agent terminal to receive them. Tools
+that honor `BROWSER` use the opener; tools that explicitly launch another
+browser need to follow the agent instructions or be configured separately.
+
 Cmd+Option+B opens a browser tab; Cmd+B toggles the sidebar. Cmd+L selects the
 address bar, Cmd+R reloads, and Cmd+Shift+[ / ] cycle all Herdr
 tabs while a webpage owns keyboard focus. Native copy/paste/select-all and

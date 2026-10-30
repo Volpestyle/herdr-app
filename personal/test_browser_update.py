@@ -94,7 +94,7 @@ class PatchTests(unittest.TestCase):
 class PromotionTests(unittest.TestCase):
     def test_automatic_install_writes_a_working_browser_opener(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); home = root / 'home'; app = home / 'Applications/Herdr Browser.app'
+            root = Path(temp); home = root / 'home with $literal'; app = home / 'Applications/Herdr Browser.app'
             candidate = root / 'Candidate.app'
             binary = candidate / 'Contents/MacOS/HerdrBrowser'; binary.parent.mkdir(parents=True)
             binary.write_text('#!' + sys.executable + '\nimport json, os, sys\nfrom pathlib import Path\nPath(os.environ["LINK_CAPTURE"]).write_text(json.dumps({"argv": sys.argv[1:], "home": os.environ["HERDR_APP_HOME"]}))\n')
@@ -109,6 +109,8 @@ class PromotionTests(unittest.TestCase):
                 updater.install_pending(state)
             self.assertEqual(state['status'], 'installed')
             opener = home / '.local/bin/herdr-browser-open'
+            self.assertIn('--launcher', opener.read_text())
+            self.assertIn(str(home / '.local/bin/herdr-browser'), opener.read_text())
             url = 'https://example.test/search?q=hello world&mode=inline'
             capture = root / 'link.json'
             import os
