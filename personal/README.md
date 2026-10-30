@@ -98,7 +98,8 @@ herdr-browser-update rollback            # Restore the previous bundle after clo
 
 The implementation is `personal/browser_update.py`. State, patch snapshot,
 candidate worktrees, logs and signing selection are in ignored
-`.local/browser-updater/`. Keep this checkout in place for the watcher; the
+`.local/browser-updater/`. Keep this checkout in place for the watcher and URL
+opener; the
 installed app includes its runtime and runs independently. Old candidates are
 retained for diagnosis. Remove obsolete build directories when needed, keeping
 any `pending.bundle` named in `state.json`.

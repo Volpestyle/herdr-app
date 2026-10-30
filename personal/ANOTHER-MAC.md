@@ -81,6 +81,6 @@ python3 personal/browser_update.py enable
 The updater checks official Herdr and stable CEF releases, builds the fork,
 and installs validated updates after the custom app closes. Zig and the CEF
 SDK are downloaded into local caches during the build. Keep both Git clones
-in place for the updater and configuration links. Closing the app keeps core
+in place for the updater, URL opener and configuration links. Closing the app keeps core
 terminals running. Fork source and configuration are backed up on GitHub;
 build caches, signing credentials and live app data are deliberately local.
