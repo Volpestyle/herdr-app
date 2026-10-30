@@ -95,8 +95,8 @@ def snapshot(base=None):
     LOCAL.mkdir(parents=True, exist_ok=True)
     base_file = LOCAL / 'base'
     tracked_base = ROOT / 'personal/upstream-base'
-    base = base or (base_file.read_text().strip() if base_file.exists() else
-                    tracked_base.read_text().strip() if tracked_base.exists() else git('rev-parse', 'HEAD'))
+    base = base or (tracked_base.read_text().strip() if tracked_base.exists() else
+                    base_file.read_text().strip() if base_file.exists() else git('rev-parse', 'HEAD'))
     base = git('rev-parse', f'{base}^{{commit}}')
     patch = export_patch(ROOT, base, FEATURE_PATHS)
     (LOCAL / 'feature.patch').write_bytes(patch)
@@ -135,12 +135,23 @@ def latest_release(state, force=False):
     return tag
 
 
-def ensure_zig(tree):
+def zig_version(tree):
     ci = (tree / '.github/workflows/ci.yml').read_text()
-    match = re.search(r'setup-zig@[^\n]+\n\s+with:\n\s+version:\s*([\d.]+)', ci)
+    match = re.search(r'setup-zig@[^\n]+\n\s+with:\n\s+version:[ \t]*([^\n]+)', ci)
     if not match:
         raise RuntimeError('Cannot determine the upstream Zig version; toolchain needs review')
-    version = match[1]
+    value = match[1].strip()
+    reference = re.fullmatch(r'\$\{\{\s*env\.([A-Z_]+)\s*\}\}', value)
+    if reference:
+        setting = re.search(r'(?m)^\s+' + re.escape(reference[1]) + r':[ \t]*([\d.]+)[ \t]*$', ci)
+        value = setting[1] if setting else ''
+    if not re.fullmatch(r'\d+\.\d+\.\d+', value):
+        raise RuntimeError('Cannot determine the upstream Zig version; toolchain needs review')
+    return value
+
+
+def ensure_zig(tree):
+    version = zig_version(tree)
     tools = Path.home() / '.local/share/herdr-browser/tools'
     name = f'zig-aarch64-macos-{version}'
     binary = tools / name / 'zig'
@@ -300,7 +311,7 @@ def build_candidate(tag, state, *, force=False, engine=None):
     tree = build_root / 'source'
     build_root.mkdir(parents=True)
     logfile = build_root / 'build.log'
-    state.update(status='building', target=tag, log=str(logfile), checked=stamp())
+    state.update(status='building', target=tag, log=str(logfile), checked=stamp(), error=None)
     write_json(LOCAL / 'state.json', state)
     try:
         with logfile.open('a', buffering=1) as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):

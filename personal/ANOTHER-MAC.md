@@ -73,7 +73,7 @@ Then, from the fork:
 
 ```sh
 python3 personal/browser_update.py snapshot
-python3 personal/browser_update.py build --tag v0.1.9
+python3 personal/browser_update.py build --tag v0.1.10
 python3 personal/browser_update.py install
 python3 personal/browser_update.py enable
 ```

@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,21 @@ class PatchTests(unittest.TestCase):
         self.assertEqual((self.root / 'host.txt').read_text(), 'upstream redesigned host\n')
         self.assertFalse((self.root / 'browser.rs').exists())
 
+    def test_browser_manifest_patch_survives_an_upstream_version_bump(self):
+        current = (updater.ROOT / 'Cargo.toml').read_text()
+        upstream = current.replace('default-run = "herdr-app"\n', '')
+        cargo = self.root / 'Cargo.toml'; cargo.write_text(upstream)
+        self.git('add', 'Cargo.toml'); self.git('commit', '-qm', 'upstream manifest')
+        base = self.git('rev-parse', 'HEAD').strip()
+        cargo.write_text(current)
+        patch = self.root / 'manifest.patch'
+        patch.write_bytes(updater.export_patch(self.root, base, ['Cargo.toml']))
+        cargo.write_text(re.sub(r'(?m)^version = "[^"]+"', 'version = "99.0.0"', upstream))
+        self.git('add', 'Cargo.toml'); self.git('commit', '-qm', 'next upstream release')
+        self.git('apply', '--check', str(patch)); self.git('apply', str(patch))
+        self.assertIn('default-run = "herdr-app"', cargo.read_text())
+        self.assertIn('version = "99.0.0"', cargo.read_text())
+
     def test_fresh_clone_snapshots_committed_browser_changes_from_tracked_base(self):
         personal = self.root / 'personal'; personal.mkdir()
         shutil.copy2(updater.__file__, personal / 'browser_update.py')
@@ -66,6 +82,12 @@ class PatchTests(unittest.TestCase):
                        cwd=self.root, check=True, capture_output=True)
         patch = (self.root / '.local/browser-updater/feature.patch').read_text()
         self.assertIn('committed browser implementation', patch)
+        self.assertEqual((self.root / '.local/browser-updater/base').read_text().strip(), self.base)
+        # Pulling a newer tracked baseline must not leave snapshot pinned to a
+        # machine's stale cache from a previous release.
+        (self.root / '.local/browser-updater/base').write_text(self.git('rev-parse', 'HEAD'))
+        subprocess.run([sys.executable, personal / 'browser_update.py', 'snapshot'],
+                       cwd=self.root, check=True, capture_output=True)
         self.assertEqual((self.root / '.local/browser-updater/base').read_text().strip(), self.base)
 
 
@@ -138,6 +160,18 @@ class FeedTests(unittest.TestCase):
 
 
 class EngineTests(unittest.TestCase):
+    def test_zig_version_accepts_literal_and_upstream_environment_setting(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); ci = root / '.github/workflows/ci.yml'
+            ci.parent.mkdir(parents=True)
+            ci.write_text('steps:\n  - uses: mlugg/setup-zig@hash\n    with:\n      version: 0.16.0\n')
+            self.assertEqual(updater.zig_version(root), '0.16.0')
+            ci.write_text('env:\n  ZIG_VERSION: 0.16.0\nsteps:\n  - uses: mlugg/setup-zig@hash\n    with:\n      version: ${{ env.ZIG_VERSION }}\n')
+            self.assertEqual(updater.zig_version(root), '0.16.0')
+            ci.write_text(ci.read_text().replace('ZIG_VERSION: 0.16.0', 'ZIG_VERSION: unknown'))
+            with self.assertRaisesRegex(RuntimeError, 'toolchain needs review'):
+                updater.zig_version(root)
+
     def test_engine_pin_is_scoped_to_cef_dependency(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

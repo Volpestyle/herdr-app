@@ -108,7 +108,7 @@ PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 personal/native_smoke.py \
   --binary '.local/preview/Herdr Browser.app/Contents/MacOS/HerdrBrowser'
 PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 -m unittest discover -s personal -p 'test_*.py'
 herdr-browser-update snapshot
-herdr-browser-update build --tag v0.1.9 --force
+herdr-browser-update build --tag v0.1.10 --force
 herdr-browser-update install
 ```
 
@@ -120,10 +120,11 @@ The saved patch excludes the lockfile and personal updater; it includes new brow
 source files. `snapshot` does not stage, commit, reset, or rewrite this working
 checkout.
 
-On a fresh clone, `snapshot` uses the recorded `personal/upstream-base`, so
-committed browser code is included. Official release tags are fetched directly
-from `herdrdev/herdr-app`, independently of the fork's `origin`. Native builds
-also need Bun and cargo-about 0.9.3 for the repository's notice generator.
+`snapshot` uses the versioned `personal/upstream-base`, including after a
+release merge when a machine still has an older cached baseline. Committed
+browser code is included. Official release tags are fetched directly
+from `herdrdev/herdr-app`, independently of the fork's `origin`. The Zig version is read from upstream CI, including its `ZIG_VERSION`
+setting. Native builds also need Bun and cargo-about 0.9.3 for the repository's notice generator.
 Fork pushes run only the small Python updater checks; inherited native CI and
 release builds run on this fork only through explicit manual dispatch.
 

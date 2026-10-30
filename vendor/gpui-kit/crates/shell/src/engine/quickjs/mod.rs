@@ -10323,6 +10323,7 @@ mod keystroke_tests {
                 modifiers,
                 key: key.to_owned(),
                 key_char: None,
+                ..Default::default()
             })
         };
 
