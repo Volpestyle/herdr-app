@@ -261,6 +261,7 @@ impl Host {
         let weak = Rc::downgrade(&browser);
         let event_allowed = allowed.clone();
         let event_container = container.clone();
+        let event_parent = parent.clone();
         let event_window = native_window.clone();
         let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| {
             let e = unsafe { event.as_ref() };
@@ -272,6 +273,12 @@ impl Host {
                 let b = event_container.bounds();
                 if p.x >= 0. && p.y >= 0. && p.x < b.size.width && p.y < b.size.height {
                     let _ = tx.try_send(Event::Focused);
+                } else if focused(&event_container, &event_window) {
+                    // GPUI inputs update their own focus handle on a click, but
+                    // don't reclaim AppKit's first responder from a native page.
+                    // Return the keyboard before GPUI handles the press so URL
+                    // selection, typing and clipboard shortcuts share a target.
+                    event_window.makeFirstResponder(Some(&event_parent));
                 }
                 return event.as_ptr();
             }

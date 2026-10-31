@@ -400,6 +400,21 @@ impl Render for Browser {
 #[cfg(test)]
 mod tests {
     use super::address;
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn selected_address_copies_with_the_input_shortcut(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_base::init);
+        let url = "https://example.com/a/path?q=copy&mode=browser";
+        let (browser, cx) = cx.add_window_view(|window, cx| {
+            super::Browser::new("browser-test", &serde_json::json!({"url": url}), window, cx)
+        });
+        browser.update_in(cx, |browser, window, cx| browser.focus_url(window, cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some(url));
+    }
+
     #[test]
     fn addresses_and_searches() {
         assert_eq!(
