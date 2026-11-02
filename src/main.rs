@@ -23,6 +23,7 @@ mod mods;
 mod mod_files;
 mod process_cwd;
 mod programs;
+mod remote_shell;
 mod settings;
 mod setup;
 mod sound;
@@ -156,6 +157,9 @@ fn main() {
     gpui_platform::application()
         .with_assets(gpui_shell::AppAssets::new(mods::app_dir()))
         .run(move |cx| {
+            if std::env::var_os("HERDR_APP_BACKGROUND").is_some() {
+                cx.set_activation_policy(ActivationPolicy::Accessory);
+            }
             #[cfg(target_os = "macos")]
             if let Err(error) = browser::runtime::start() { tracing::error!("Chromium initialization failed: {error:#}"); }
             let fonts = settings::BUNDLED_FONTS.iter().map(|f| std::borrow::Cow::Borrowed(*f)).collect();
@@ -208,6 +212,9 @@ fn main() {
 pub fn open_main(core: std::sync::Arc<hc::Core>, requests: async_channel::Receiver<mods::Request>, cx: &mut App) {
             let (window_bounds, display_id) = place::initial(cx);
             let options = WindowOptions {
+                // An isolated QA instance can render without taking the owner's
+                // keyboard focus. Normal launches retain their existing behavior.
+                focus: std::env::var_os("HERDR_APP_BACKGROUND").is_none(),
                 window_bounds: Some(window_bounds),
                 display_id,
                 // macOS: always see-through, so a layout can draw its own title bar
@@ -225,5 +232,5 @@ pub fn open_main(core: std::sync::Arc<hc::Core>, requests: async_channel::Receiv
             };
             cx.open_window(options, |window, cx| cx.new(|cx| window::AppWindow::new(core, requests, window, cx)))
                 .expect("cannot open the Herdr window");
-            cx.activate(true);
+            if std::env::var_os("HERDR_APP_BACKGROUND").is_none() { cx.activate(true); }
 }

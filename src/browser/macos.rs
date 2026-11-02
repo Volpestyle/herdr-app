@@ -71,9 +71,19 @@ wrap_request_handler! {
     }
 }
 wrap_life_span_handler! {
-    struct Life { tx: Tx }
+    struct Life { tx: Tx, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>> }
     impl LifeSpanHandler {
-        fn on_after_created(&self, _browser: Option<&mut Browser>) { runtime::ACTIVE.fetch_add(1, Ordering::Relaxed); }
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            let primary = self.pending.replace(false);
+            if primary { runtime::PENDING.fetch_sub(1, Ordering::Relaxed); }
+            runtime::ACTIVE.fetch_add(1, Ordering::Relaxed);
+            if primary { if let Some(browser) = browser {
+                if let Some(cell) = self.browser.upgrade().filter(|_| !self.closing.get()) {
+                    *cell.borrow_mut() = Some(browser.clone());
+                    let _ = self.tx.try_send(Event::Ready);
+                } else if let Some(host) = browser.host() { host.close_browser(1); }
+            } }
+        }
         fn on_before_close(&self, _browser: Option<&mut Browser>) { runtime::ACTIVE.fetch_sub(1, Ordering::Relaxed); }
         fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
             // Tear down this child view, never Herdr's top-level window.
@@ -122,18 +132,20 @@ wrap_download_handler! {
     }
 }
 wrap_client! {
-    struct PageClient { tx: Tx, gate: Arc<AtomicBool> }
+    struct PageClient { tx: Tx, gate: Arc<AtomicBool>, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>>, container: Retained<NSView> }
     impl Client {
         fn display_handler(&self) -> Option<DisplayHandler> { Some(Display::new(self.tx.clone())) }
         fn load_handler(&self) -> Option<LoadHandler> { Some(Load::new(self.tx.clone())) }
         fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new()) }
-        fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone())) }
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone(), self.browser.clone(), self.closing.clone(), self.pending.clone())) }
         fn focus_handler(&self) -> Option<FocusHandler> { Some(Focus::new(self.gate.clone())) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone())) }
     }
 }
 pub struct Host {
     browser: runtime::BrowserCell,
+    control: RefCell<Option<Rc<super::control::Control>>>,
+    closing: Rc<Cell<bool>>,
     container: Retained<NSView>,
     parent: Retained<NSView>,
     window: Retained<NSWindow>,
@@ -185,6 +197,7 @@ fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
 impl Host {
     pub fn new(
         url: &str,
+        profile: &str,
         allowed: Rc<Cell<bool>>,
         tx: Tx,
         window: &GpuiWindow,
@@ -208,9 +221,17 @@ impl Host {
         if std::env::var_os("HERDR_BROWSER_TEST_WINDOW_FRONT").is_some() {
             native_window.orderFrontRegardless();
         }
+        // A fully occluded GPUI window may not paint its pane layout yet.
+        // Give Chromium a usable provisional viewport immediately; the canvas
+        // replaces it with exact pane bounds on its first paint. Keep the view
+        // hidden until that placement, so it cannot cover unrelated app chrome.
+        let initial = NSSize::new(
+            parent.bounds().size.width.max(1.),
+            (parent.bounds().size.height - 44.).max(1.),
+        );
         let container = NSView::initWithFrame(
             NSView::alloc(mtm),
-            NSRect::new(NSPoint::new(0., 0.), NSSize::new(1., 1.)),
+            NSRect::new(NSPoint::new(0., 0.), initial),
         );
         container.setHidden(true);
         parent.addSubview(&container);
@@ -223,25 +244,44 @@ impl Host {
             &Rect {
                 x: 0,
                 y: 0,
-                width: 1,
-                height: 1,
+                width: initial.width as i32,
+                height: initial.height as i32,
             },
         );
         let focus_gate = Arc::new(AtomicBool::new(false));
-        let mut client = PageClient::new(tx.clone(), focus_gate.clone());
-        let browser = browser_host_create_browser_sync(
+        let browser = Rc::new(RefCell::new(None));
+        let closing = Rc::new(Cell::new(false));
+        let pending = Rc::new(Cell::new(true));
+        // The client retains the parent until async creation finishes, even if
+        // its pane closes while the request context is loading.
+        let mut client = PageClient::new(
+            tx.clone(),
+            focus_gate.clone(),
+            Rc::downgrade(&browser),
+            closing.clone(),
+            pending.clone(),
+            container.clone(),
+        );
+        let mut context = runtime::request_context(profile)?;
+        runtime::PENDING.fetch_add(1, Ordering::Relaxed);
+        let created = browser_host_create_browser(
             Some(&info),
             Some(&mut client),
             Some(&url.into()),
             Some(&BrowserSettings::default()),
             None,
-            None,
-        )
-        .ok_or_else(|| anyhow::anyhow!("Chromium could not create a native browser"))?;
-        let browser = Rc::new(RefCell::new(Some(browser)));
+            context.as_mut(),
+        );
+        if created == 0 {
+            pending.set(false);
+            runtime::PENDING.fetch_sub(1, Ordering::Relaxed);
+            anyhow::bail!("Chromium could not schedule a native browser");
+        }
         let weak_container = ObjcWeak::from_retained(&container);
         let weak_parent = ObjcWeak::from_retained(&parent);
+        let teardown = closing.clone();
         runtime::register(&browser, move || {
+            teardown.set(true);
             autoreleasepool(|_| {
                 if let Some(container) = weak_container.load() {
                     if let (Some(window), Some(parent)) = (container.window(), weak_parent.load()) {
@@ -333,6 +373,8 @@ impl Host {
         };
         Ok(Self {
             browser,
+            control: RefCell::new(None),
+            closing,
             container,
             parent,
             window: native_window,
@@ -343,6 +385,20 @@ impl Host {
             focus_gate,
             monitor,
         })
+    }
+    pub fn starting(&self) -> bool {
+        !self.closing.get() && self.browser.borrow().is_none()
+    }
+    pub fn control(&self) -> Result<Rc<super::control::Control>, String> {
+        if let Some(control) = self.control.borrow().as_ref() {
+            return Ok(control.clone());
+        }
+        let browser = self.browser.borrow();
+        let control = Rc::new(super::control::Control::new(
+            browser.as_ref().ok_or("Browser is closed")?,
+        )?);
+        *self.control.borrow_mut() = Some(control.clone());
+        Ok(control)
     }
     fn native_view(&self) -> Option<&NSView> {
         let browser = self.browser.borrow();
@@ -456,6 +512,7 @@ impl Host {
 }
 impl Drop for Host {
     fn drop(&mut self) {
+        self.closing.set(true);
         if let Some(monitor) = self.monitor.take() {
             unsafe {
                 NSEvent::removeMonitor(&monitor);
@@ -479,9 +536,16 @@ mod tests {
     }
     #[test]
     fn browser_and_sidebar_shortcuts_match_the_global_keymap() {
-        let keys: serde_json::Value = serde_json::from_str(include_str!("../../defaults/keys.macos.json")).unwrap();
-        assert_eq!(shortcut("b", false, false), keys["global"]["cmd-b"].as_str());
-        assert_eq!(shortcut("b", false, true), keys["global"]["cmd-alt-b"].as_str());
+        let keys: serde_json::Value =
+            serde_json::from_str(include_str!("../../defaults/keys.macos.json")).unwrap();
+        assert_eq!(
+            shortcut("b", false, false),
+            keys["global"]["cmd-b"].as_str()
+        );
+        assert_eq!(
+            shortcut("b", false, true),
+            keys["global"]["cmd-alt-b"].as_str()
+        );
         assert_eq!(shortcut("l", false, true), None);
     }
 }

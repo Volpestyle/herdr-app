@@ -1,0 +1,101 @@
+{
+  "sourceCommit": "68f16e8863d129af2de685ea9e103728f1dc4513",
+  "platform": "macOS / Apple Silicon",
+  "ok": true,
+  "cliCalls": 46,
+  "commandsExercised": [
+    "browser.click",
+    "browser.inspect",
+    "browser.navigate",
+    "browser.open",
+    "browser.press",
+    "browser.read",
+    "browser.screenshot",
+    "browser.scroll",
+    "browser.snapshot",
+    "browser.type",
+    "browser.wait"
+  ],
+  "checks": {
+    "snapshotWithRefs": [
+      "e1 RootWebArea \"Agent control fixture\"",
+      "e2 main \"\"",
+      "e3 heading \"Agent control fixture\"",
+      "e4 StaticText \"Agent control fixture\"",
+      "- InlineTextBox \"Agent control fixture\"",
+      "e5 button \"Click me\"",
+      "e6 StaticText \"Click me\"",
+      "- InlineTextBox \"Click me\""
+    ],
+    "snapshotGeneration": 1,
+    "clickChangedVisibleText": true,
+    "replacementAndSubmit": true,
+    "passwordTypeAndPressRefused": true,
+    "staleRefsRefused": 3,
+    "personReadAndNavigationRefused": true,
+    "personCookiesIsolated": true,
+    "unknownAndClosedCallersRefused": true,
+    "waitTimeoutReported": true,
+    "foregroundUnchangedAtEveryCliReply": true,
+    "windowKey": false,
+    "tcpListenersReportedByLsof": "",
+    "keyEventObserved": true,
+    "wheelScrollObserved": true,
+    "scopedTreeExcludedOutsideText": true,
+    "foregroundAuditReplies": 46,
+    "nativeViewShownAtInspection": false,
+    "paneBoundsAtInspection": null,
+    "workedBeforeFirstPanePaint": true
+  },
+  "png": {
+    "dimensions": [
+      2560,
+      1552
+    ],
+    "sha256": "d501b7e3c5a7e724a38b13114079f2e33b67a8e0ff0a9401a427089689f6be9f",
+    "localPath": ".local/agent-control-smoke/1793592732262571000/page.png",
+    "published": false
+  },
+  "binarySha256": "ab9d15f77bfec69fc0efdf7e96edb0111a073f36c2b7bd1d1db6fda669e2a82d",
+  "checksPassed": {
+    "cargoReleaseBuildBins": true,
+    "commandAndGuideTests": 4,
+    "terminalParserTests": 38,
+    "existingPythonTests": 20,
+    "resizeRegression": "resize_queues_a_report_only_when_the_program_requested_it",
+    "emojiRegression": "vs16_makes_an_emoji_two_cells_wide"
+  },
+  "rawEvidenceLocal": ".local/agent-control-smoke/1793592732262571000",
+  "limits": [
+    "Loopback fixture proof; real sign-in, external sites and extension workflows were not exercised.",
+    "Markdown output is escaped plain visible text.",
+    "Raw PNG and full transcript remain local because worker evidence/report admission was refused."
+  ],
+  "cleanup": {
+    "terminalReturnCode": 0,
+    "terminalState": "finished",
+    "terminalReason": "killed",
+    "coreReturnCode": 0,
+    "coreStopped": true
+  },
+  "mergeCommit": "3d185dd077ad91e574e4488e9a742c79f01ff423",
+  "upstreamCommit": "8cbb9f3348ea802e9c06cca3b413a53d3ba9064e",
+  "version": "0.1.11",
+  "buildProfile": "release",
+  "notices": {
+    "same_dependency_manifests": true,
+    "byte_identical": true,
+    "sha256": "052d78e752ffc6ffc7b688fb21091af08065190fe5450b258b3150fa3a629969"
+  },
+  "candidate": {
+    "bundle": ".local/agent-control-011/Herdr Browser.app",
+    "version": "0.1.11",
+    "patch": "17f2d985db5906806371c46858a62262259a23ad22ff59dec4973d8fe236a945",
+    "binarySha256": "d9ecd108b619b88451c98223787bea2b22850a219847297392bcac83e31c974f",
+    "productionBundleId": "dev.james.herdr-browser",
+    "designatedRequirementMatchesInstalled": true,
+    "installedBeforeAndAfterSha256": "5fa7be4027afcb1fdbcec132082303aca274a75adbb9e8d8708c325f8613720f",
+    "installedUnchangedDuringProof": true,
+    "engine": "156.2.0+156.0.14"
+  }
+}

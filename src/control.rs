@@ -43,7 +43,7 @@ fn serve(stream: UnixStream, tx: async_channel::Sender<Request>) {
     }
     let reply = match serde_json::from_str::<Value>(&line) {
         Ok(cmd) => {
-            let timeout = Duration::from_secs(if cmd.get("shot").is_some() { 30 } else { 5 });
+            let timeout = Duration::from_secs(if cmd.get("shot").is_some() || cmd["do"].as_str().is_some_and(crate::browser::is_page_command) { 40 } else { 5 });
             let (reply_tx, reply_rx) = std::sync::mpsc::channel();
             let _ = tx.send_blocking(Request::Control { cmd, reply: reply_tx });
             reply_rx.recv_timeout(timeout).unwrap_or_else(|_| json!({ "error": "the window did not answer" }))
@@ -75,7 +75,7 @@ pub fn client(args: &[String]) -> i32 {
         println!("{}", serde_json::to_string_pretty(&crate::commands::listing()).unwrap());
         return 0;
     }
-    let cmd = match args {
+    let mut cmd = match args {
         [verb, rest @ ..] if verb == "shot" && rest.len() <= 1 => {
             let path = PathBuf::from(rest.first().map(String::as_str).unwrap_or("herdr-shot.png"));
             let path = match std::path::absolute(path) {
@@ -96,6 +96,12 @@ pub fn client(args: &[String]) -> i32 {
         },
         _ => return fail("usage: herdr-app ls | herdr-app commands | herdr-app status | herdr-app shot [file.png] | herdr-app do <command> [--arg value ... | json]"),
     };
+    // A caller identifies the terminal that opened its page, never whichever
+    // pane the person currently has focused. This is routing, not authentication.
+    if let Some(terminal) = ["HC_TERMINAL_ID", "HERDR_PANE_ID"].into_iter()
+        .filter_map(|key| std::env::var(key).ok()).find(|value| !value.is_empty()) {
+        if !terminal.is_empty() { cmd["caller_terminal"] = terminal.into(); }
+    }
     let mut stream = match UnixStream::connect(socket()) {
         Ok(s) => s,
         Err(_) if args.first().is_some_and(|v| v == "feedback") => {
@@ -106,7 +112,7 @@ pub fn client(args: &[String]) -> i32 {
         }
         Err(e) => return fail(&format!("no Herdr window at {}: {e}", socket().display())),
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(35)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(45)));
     let mut line = String::new();
     if stream.write_all(format!("{cmd}\n").as_bytes()).is_err() || BufReader::new(&stream).read_line(&mut line).is_err() {
         return fail("the window hung up");

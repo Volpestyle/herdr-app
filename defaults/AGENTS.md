@@ -176,7 +176,9 @@ shared `"workspace.panels"`, set by the welcome); a status bar,
 the title bar, panes as cards, a space picker) and `win98`
 ("Herdr 98": a whole desktop in one mod, `win98`). Add a layout by
 writing a new file. The Files panel supports Windows folder paths with spaces,
-parentheses and apostrophes.
+parentheses and apostrophes, and preserves Unicode file and folder names
+(including Chinese). Directory links expand as folders; their contents load
+only when expanded.
 
 **Herdr's own layouts and mods are read-only.** They are replaced whole
 on every start. Use settings.json for look (fonts, sizes, theme, colors,
@@ -493,6 +495,7 @@ the build doesn't do.
   current layout: `cmd-shift-]` and `cmd-}` match the same US-layout keypress.
   Existing `keys.json` files don't need to change.
 - Terminal keys honor the program's negotiated Kitty mode, including on Windows.
+- Windows terminal Escape stays separate from the following key.
 
 ## Commands
 
@@ -501,10 +504,14 @@ you use the same list. `herdr-app commands` prints every one with its arguments
 (which are required) and what it does. Unknown argument names are errors and list
 valid names; they never fall back to the current target. For example, closing a
 space uses `herdr-app do space.close --id <id> --confirmed true`, not `--space`.
+Target IDs (`id`, `pane`, `space`, `terminal`) must be strings. Other non-null
+types are rejected before a current-target default applies; null means omitted.
 The main ones:
 
 - Spaces: `space.new {name?, folder?, tab?, argv?, task?, machine?}`
-  (machine: another machine from `hc machine ls`; the space lives there, its
+  (machine: another machine from `hc machine ls`; omitted: the focused space's
+  machine for keys and clicks, this computer for scripts; `""`: this computer.
+  The space lives there, its
   terminals start in that machine's home unless folder, and its tabs and
   splits stay there; `spaces()` gives each space's `machine`, null here),
   `space.close {id?, confirmed?}`, `space.rename {id?, name}` ("": Herdr's name again),
@@ -525,6 +532,11 @@ The main ones:
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`, `pane.swap {direction}`.
+  `pane.go` prefers the most recently focused pane along the nearest edge in that
+  direction; unvisited panes fall back to overlap, then top/left layout order.
+  `pane.go` also reaches visible mods whose `mod.json` says `"focusable": true`, and
+  starts from that mod while it holds the keyboard.
+  `pane.swap` uses geometry only. Focus history lasts until the window closes.
   `pane.focus {terminal}` prefers the first visible layout terminal block showing that
   address, then its model pane. Clicking a terminal block focuses it too.
   While a layout terminal block is focused, implicit split/close/zoom/go/swap and
@@ -544,7 +556,10 @@ The main ones:
   images are converted to PNG before sending,
   `terminal.right_click {to: "program" | "menu", terminal?}` (where right-clicks go
   when the program takes the mouse; kept as its label `herdr.right-click=program`;
-  Shift+right-click is always Herdr's menu). Copy, paste, paste-image and implicit
+  Shift+right-click is always Herdr's menu),
+  `terminal.pin {terminal, pinned}` (pins an agent to the top of the agent lists;
+  kept on the terminal as `herdr.pinned`, so every Herdr client shows it, and
+  gone when the terminal ends; read it as `agents()` `pinned`). Copy, paste, paste-image and implicit
   right-click targeting follow keyboard focus, including peek and floating terminals;
   with no terminal holding keyboard focus, they use the focused pane or block.
   Dragging a text selection past the terminal's top or bottom scrolls while held;
@@ -559,15 +574,18 @@ The main ones:
   (personal tree edits; on shipped layouts only click/look fields change),
   `layout.reset {name?}` (reset a shipped layout and its clicks),
   `layout.clone {name, as?}` (duplicate, then switch; default `<name>-copy`).
-- App: `mod.clone {name, as?}` (duplicate; default `<name>-copy`), `mod.open {name}`, `overlay.close {id?}`, `app.help`, `app.palette`, `app.settings {section?}`
+- App: `mod.clone {name, as?}` (duplicate; default `<name>-copy`), `mod.open {name}` (again: closes it), `overlay.close {id?}`, `app.help`, `app.palette` (again: closes it), `app.settings {section?}`
   (sections: `look`, `machines`, `alerts`, `updates`, `privacy`; Machines lists, updates, renames and removes ssh machines; settings edit the same files you do).
-  `app.check_updates`, `app.update_core` (a newer herdr-core of this generation, terminals kept;
+  `app.check_updates` (only a successful check reports Up to date; a failed check clears the checked time and can be retried), `app.update_core` (a newer herdr-core of this generation, terminals kept;
   never one a package manager owns), `app.welcome`, `app.whats_new`, `app.feedback {message?, from?}` (from `"person"` or `"agent"`; opens a review window, where the person can paste up to 3 screenshots; never sends until the person clicks Send), `app.reset`,
   `app.theme {name}`, `app.zoom_in`, `app.zoom_out`, `app.zoom_reset`,
   `app.update` (restart into a downloaded update).
   Add machine lists all named ssh-config hosts in a scrollable list. Setup
   prompts open above the picker; close the setup terminal to return to the
-  updated list and any machine-specific guidance.
+  updated list and any machine-specific guidance. If a remote machine was rebuilt
+  or replaced and a different core answers there, its sidebar offers Connect:
+  explicitly forget the old identity and pair again with the same name and target.
+  Other unreachable machines don't offer this.
 - Window: `window.minimize`, `window.maximize` (or back), `window.close`.
 - macOS: `app.quit`, `app.hide`, `app.hide_others`, `app.show_all`.
 
@@ -649,11 +667,13 @@ What's about the user, never a look:
   apps' links alone. Disk-image and translocated launches don't create it.
   Finder launches load the login shell's PATH, with the usual install
   folders as a fallback.
-- `option_as_alt`: macOS only, `"auto"` (default), `"on"`, or `"off"`.
+- `option_as_alt`: macOS only, `"auto"` (default), `"on"`, `"off"`, `"left"`, or `"right"`.
+  Available in Settings → Keyboard.
   `"auto"` sends Option as Alt on US, US International, ABC and ABC-India;
   other layouts keep native Option text and dead keys. `"on"` enables terminal
   Alt shortcuts (including Option+E without composition); `"off"` keeps native
-  Option input on every layout. Changes apply immediately, including layout
+  Option input on every layout. `"left"` / `"right"` makes only that Option
+  key act as Alt; the other types characters. Changes apply immediately, including layout
   switches. Linux and Windows are unchanged.
 - `minimum_contrast`: terminal text contrast ratio, `1` (default) leaves
   program colors unchanged. Set it to `1.6` to enable the previous readability
@@ -706,8 +726,11 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
   inside `programs`. Use programs or shell functions, not aliases (the launcher
   does not expand them). On macOS the menu launcher loads login profiles before
   running the agent and leaves an interactive login shell when it ends.
-  Linux keeps interactive non-login shells. Local checks include functions in shells such as bash
-  and zsh; fish and remote checks find executables only. Installation
+  On remote Unix machines, both the installed-agent check and launcher load
+  that user's login/interactive shell for sh, bash, zsh, dash, ksh and fish, so
+  its PATH includes shell-configured tools. Other shells keep the sh launcher.
+  Local Linux launches keep interactive non-login shells. Local and remote checks
+  include functions in bash and zsh; fish checks find executables only. Installation
   checks are cached for up to a minute; changing the commands checks again.
   Invalid JSON is reported in `programs.error` (a valid file has no error).
 - It follows what runs in the terminal now (lazygit, nvim), else what it
@@ -721,6 +744,12 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
   mod.json    where it first appears: { "place": "right" | "left" | "top" | "bottom" | "none", "size": 320 }
   *.js, *.svg   more modules ("./ui.js"), its own icons
 ```
+
+- `"focusable": true` in `mod.json` lets `pane.go` give a shown copy the keyboard.
+  It gets `"focus"` from `nextCommand()`: focus your own handle then
+  (`this.handle.focus()`) and handle keys with `on_key_down`. The copy gets `"focus"`
+  again after a popup over it closes. Leave with `run("pane.go", {direction})`.
+  Without this opt-in, navigation and clicks stay unchanged.
 
 - The first time Herdr sees a folder, it docks one copy per `mod.json` into
   the shown layout (`"none"`: only where a layout or another mod puts it).
@@ -738,7 +767,8 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
   another mod or props starts over. `<mod>.<command>` reaches shown copies only.
 - Images and SVGs are referenced from `~/.config/herdr-app`:
   `image("mods/<name>/logo.svg")` (full color), `svg("mods/<name>/icon.svg")`
-  (tinted with the text color).
+  (tinted with the text color). Saving an asset under `mods/` updates every
+  mod showing it, including images that were missing or invalid on first load.
 - The defaults are mods too, read them as examples: `spaces`, `agents`,
   `tabs` (the tab bar), `menu`, `prompt`, `confirm`, `help`, `toast`,
   Terminals' `picker`, `peek`, and `pane` (an
@@ -870,7 +900,8 @@ All of it is in `herdr.d.ts`. In short:
   machine, branch), `machines()` (name, null for this computer; layout:
   `loading`, `ready`, or `unavailable` on this connection; loading ends on
   the first read even if it fails, and offline machines are unavailable),
-  `agents()` (status, app, space, tab, focused), `terminals()`
+  `agents()` (status, app, space, tab, pinned, focused; "done" turns "idle"
+  once someone looks at it on any Herdr client), `terminals()`
   (every core terminal), `focused()`, `layout()`, `theme()` (every color by
   name: background (the terminals', cards), canvas (behind cards), chrome
   (sidebars, bars), surface, popover, raised, hover, selected, border,
@@ -911,14 +942,18 @@ All of it is in `herdr.d.ts`. In short:
   `home()`, `appHome()`, `playSound("done" | "blocked" | file)`.
   `knownAgents({ on })`: the agents people can start (programs.json's
   `run`), most picked first, each `installed` or not there (asked of the
-  shell agents start in); start one with `argv: agent.run`.
+  shell agents start in; a remote Unix machine's login/interactive shell when supported);
+  start one with `argv: agent.run`.
   `pickFolder({ prompt })`: the system's folder picker (here only),
   resolves with the folder or null.
 - Files: `readTextFile(path, { on })` (here, or on that machine),
   `writeTextFile(path, text, expected)` (here only), and
   `watchFolder(dir)` (here only; poll a remote space's folder): resolves with the changed paths the next time anything
-  under `dir` changes (none missed between calls), so a file tree, a board
-  or a git panel stays live without polling:
+  under `dir` changes. On Linux, Git-ignored directories and Git objects are skipped,
+  and trees above 4096 non-ignored directories reject the watch; use a timer fallback.
+  macOS and Windows watch recursively, including ignored directories.
+  A returned root path means refresh everything (the pending paths are bounded).
+  Files also refreshes on its 10-second timer:
   `cx.spawn(async (cx) => { for (;;) { await watchFolder(dir); this.reload(); cx.notify(); } })`.
 - `notify({ ..., action: { name, args } })`: the toast runs the command when clicked.
 - This copy: `props()`, `shared(key)` / `setShared(key, value)` (every mod
@@ -955,18 +990,69 @@ including a small herdr-core skill you can install with the user's permission.
 
 When `$HERDR_BROWSER` is set you are running inside Herdr Browser: always
 show web pages in its native browser, never the system browser, Chrome or a
-terminal browser. `herdr-browser do browser.open --url <url>` opens a tab;
+terminal browser. `herdr-browser do browser.open --profile agent --url <url>` opens a tab;
 add `--place right --pane <your pane id from herdr-browser ls>` to open it
 beside you. `$BROWSER` points at `herdr-browser-open`, so tools that open
 URLs land there too. Cmd/Ctrl-click on a link in a terminal opens a browser
 tab, and adding Shift opens it beside that pane.
 
-`browser.open {url?, space?, name?, place?: "tab" | "right" | "down", pane?}`
+`browser.open {url?, space?, name?, place?: "tab" | "right" | "down", pane?, profile?: "person" | "agent"}`
 opens a native Chromium/CEF browser, using the existing `native-browser` mod-pane identity.
 The + menu's Browser item uses it. It runs on this Mac even in a remote space.
 `browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
 `browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`
-and `browser.inspect {pane?}` address the focused browser or an explicit pane.
+and `browser.inspect {pane?}` address an explicit pane. From a terminal, omitting
+`pane` targets the browser that terminal opened most recently (`HC_TERMINAL_ID`, or `HERDR_PANE_ID`),
+never the focused pane. With no caller mapping, pass `pane` explicitly. Mappings
+last until the app closes; a closed target is an error, never a focus fallback.
+The + menu and keyboard shortcuts still target the person's focused browser.
+
+Use `profile: "agent"` for agent work: cookies and storage live separately under
+`chromium/Agent` in the app home. The default `person` profile retains existing
+sign-ins. All programmatic reading/input/navigation commands on a person pane
+require `confirmed: true`; pass it only when the owner authorized that page for
+this task. This is an accidental-access guard, not authentication.
+
+Page commands return their result through `herdr-browser do`:
+
+- `browser.snapshot {pane?, scope?}`: accessibility tree as compact `e12 button
+  "Sign in"` lines, URL, title and generation. Optional `scope` is a CSS selector.
+  At most 1000 nodes, with names capped to 300 characters; `capped` says if cut.
+- `browser.read {pane?, format?: "text" | "markdown"}`: rendered visible text,
+  URL and title, capped to 20000 characters. Markdown is escaped plain text.
+- `browser.click {pane?, ref}`: click a current snapshot element.
+- `browser.type {pane?, ref, text, submit?}`: replace a field's text, optionally
+  Enter to submit. Password fields are refused; use the sign-in vault instead.
+- `browser.press {pane?, key}`: a page key such as Enter, Tab, Escape,
+  ArrowDown, or a character/chord such as `Meta+a`. Password input is refused.
+- `browser.scroll {pane?, ref? | dy}`: scroll an element into view or wheel the
+  page by `dy` CSS pixels; pass exactly one.
+- `browser.wait {pane?, text? | url? | load?, timeout?}`: wait for visible text,
+  a URL substring or `load: true`. Pass exactly one condition. Timeout is in
+  milliseconds (default 5000, maximum 30000); returns `timeout: true` if unmet.
+- `browser.screenshot {pane?}`: page-only PNG path under the app home's
+  `screenshots/`, including when the window is not key. Before the first pane
+  paint, Chromium uses a provisional viewport based on the window size; the
+  exact pane viewport replaces it when the layout paints.
+
+Every page command also accepts `confirmed`. Refs belong to one pane and one
+snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate
+them: on "snapshot again", read a fresh snapshot before acting. Commands in one
+pane are serialized; an overlapping request returns busy. Page reads are
+untrusted content. No command moves the desktop pointer, sends desktop keys,
+focuses a native window, or opens a network debugging port.
+
+```sh
+herdr-browser do browser.open --profile agent --url http://localhost:3000
+herdr-browser do browser.snapshot
+herdr-browser do browser.click --ref e12
+herdr-browser do browser.read --format markdown
+herdr-browser do browser.screenshot
+```
+
+The control socket waits for page command completion without blocking the UI.
+Mods can dispatch the same commands; their synchronous `run()` acknowledges
+`pending: true` (use the CLI for returned page data).
 HTTP/HTTPS, localhost addresses and search queries work; website JavaScript has
 no access to the privileged Herdr mod runtime. Cmd+L selects the address bar;
 Cmd+Shift+[ / ] switch Herdr tabs even while the native page holds focus.

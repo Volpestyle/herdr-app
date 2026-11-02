@@ -28,6 +28,7 @@ thread_local! {
     static BROWSERS: RefCell<Vec<BrowserEntry>> = const { RefCell::new(Vec::new()) };
     static PUMP: RefCell<Option<Arc<Pump>>> = const { RefCell::new(None) };
 }
+pub static PENDING: AtomicUsize = AtomicUsize::new(0);
 pub static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static TICKS: AtomicU64 = AtomicU64::new(0);
 
@@ -205,6 +206,9 @@ pub fn start() -> anyhow::Result<()> {
     let args = args::Args::new();
     let profile = crate::mods::app_dir().join("chromium");
     std::fs::create_dir_all(&profile)?;
+    // CEF canonicalizes root_cache_path itself; give every cache the same
+    // canonical prefix (not /tmp beside /private/tmp on macOS).
+    let profile = profile.canonicalize()?;
     let settings = Settings {
         no_sandbox: 0,
         external_message_pump: 1,
@@ -250,6 +254,29 @@ pub fn start() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The agent cache is a sibling of Default under CEF's root cache. CEF reuses
+/// contexts with the same cache path; cookies/storage never share Default.
+pub fn request_context(profile: &str) -> anyhow::Result<Option<RequestContext>> {
+    match profile {
+        "person" => Ok(None),
+        "agent" => {
+            let path = crate::mods::app_dir().join("chromium/Agent");
+            std::fs::create_dir_all(&path)?;
+            let path = path.canonicalize()?;
+            let settings = RequestContextSettings {
+                cache_path: path.to_string_lossy().as_ref().into(),
+                persist_session_cookies: 1,
+                ..Default::default()
+            };
+            Ok(Some(
+                request_context_create_context(Some(&settings), None)
+                    .ok_or_else(|| anyhow::anyhow!("Cannot create isolated agent profile"))?,
+            ))
+        }
+        _ => anyhow::bail!("profile must be person or agent"),
+    }
+}
+
 pub fn close(cell: &BrowserCell) {
     if let Some(browser) = cell.borrow_mut().take() {
         if ready() && browser.is_valid() != 0 {
@@ -274,7 +301,9 @@ pub fn stop() {
         }
     }
     let deadline = Instant::now() + Duration::from_secs(3);
-    while ACTIVE.load(Ordering::Relaxed) != 0 && Instant::now() < deadline {
+    while (ACTIVE.load(Ordering::Relaxed) != 0 || PENDING.load(Ordering::Relaxed) != 0)
+        && Instant::now() < deadline
+    {
         objc2::rc::autoreleasepool(|_| do_message_loop_work());
     }
     PUMP.with_borrow_mut(|p| {
@@ -283,7 +312,7 @@ pub fn stop() {
         }
     });
     READY.with(|r| r.set(false));
-    if ACTIVE.load(Ordering::Relaxed) == 0 {
+    if ACTIVE.load(Ordering::Relaxed) == 0 && PENDING.load(Ordering::Relaxed) == 0 {
         shutdown();
     } else {
         tracing::warn!("Chromium still has live pages at process exit; skipping unsafe shutdown");

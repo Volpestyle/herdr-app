@@ -63,7 +63,7 @@ def main():
         until(lambda: subprocess.run([binary, 'status'], env=env, capture_output=True, timeout=5).returncode == 0, 'app control socket')
         shell = command('space.new', name='Browser smoke', folder=str(work), tab='Terminal')
         url = f'http://127.0.0.1:{server.server_port}'
-        browser = command('browser.open', url=url + '/one.html')
+        browser = command('browser.open', profile='agent', url=url + '/one.html')
         pane = browser['pane']
         subprocess.run([binary], env=env, timeout=5)
         def inspected():
@@ -86,7 +86,7 @@ def main():
         until(lambda: not inspected().get('native', {}).get('shown'), 'hidden browser tab')
         command('tab.next')
         until(lambda: inspected().get('native', {}).get('shown'), 'restored browser tab')
-        split = command('browser.open', pane=pane, place='right', url=url + '/one.html')
+        split = command('browser.open', profile='agent', pane=pane, place='right', url=url + '/one.html')
         def split_bounds():
             left = inspected()['native']['bounds']
             right = command('browser.inspect', pane=split['pane']).get('native', {})
