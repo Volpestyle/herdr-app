@@ -200,7 +200,7 @@ def main():
                 app.wait(timeout=10)
             except Exception:
                 app.terminate(); app.wait(timeout=10)
-        # Stopping the core preserves terminal programs. End only this test's
+        # Stopping the core retains kept terminal records. End only this test's
         # terminal first, even if the preview failed before it could close space.
         cleanup = {}
         if space:
