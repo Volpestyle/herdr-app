@@ -996,7 +996,9 @@ Page commands return their result through `herdr-browser do`:
   a URL substring or `load: true`. Pass exactly one condition. Timeout is in
   milliseconds (default 5000, maximum 30000); returns `timeout: true` if unmet.
 - `browser.screenshot {pane?}`: page-only PNG path under the app home's
-  `screenshots/`, including when the window is not key.
+  `screenshots/`, including when the window is not key. Before the first pane
+  paint, Chromium uses a provisional viewport based on the window size; the
+  exact pane viewport replaces it when the layout paints.
 
 Every page command also accepts `confirmed`. Refs belong to one pane and one
 snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate

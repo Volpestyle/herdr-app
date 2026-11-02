@@ -221,9 +221,17 @@ impl Host {
         if std::env::var_os("HERDR_BROWSER_TEST_WINDOW_FRONT").is_some() {
             native_window.orderFrontRegardless();
         }
+        // A fully occluded GPUI window may not paint its pane layout yet.
+        // Give Chromium a usable provisional viewport immediately; the canvas
+        // replaces it with exact pane bounds on its first paint. Keep the view
+        // hidden until that placement, so it cannot cover unrelated app chrome.
+        let initial = NSSize::new(
+            parent.bounds().size.width.max(1.),
+            (parent.bounds().size.height - 44.).max(1.),
+        );
         let container = NSView::initWithFrame(
             NSView::alloc(mtm),
-            NSRect::new(NSPoint::new(0., 0.), NSSize::new(1., 1.)),
+            NSRect::new(NSPoint::new(0., 0.), initial),
         );
         container.setHidden(true);
         parent.addSubview(&container);
@@ -236,8 +244,8 @@ impl Host {
             &Rect {
                 x: 0,
                 y: 0,
-                width: 1,
-                height: 1,
+                width: initial.width as i32,
+                height: initial.height as i32,
             },
         );
         let focus_gate = Arc::new(AtomicBool::new(false));

@@ -74,6 +74,7 @@ def main():
     app = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
     transcript = []
     foreground_audit = []
+    space = None
 
     def command(command_name, expect_error=None, expect_timeout=False, caller='qa-terminal-a', caller_key='HC_TERMINAL_ID', **kwargs):
         cli_env = env.copy()
@@ -194,11 +195,21 @@ def main():
         (work / 'transcript.json').write_text(json.dumps(transcript, indent=2))
         if app.poll() is None:
             try:
+                if space: command('space.close', id=space['space'], confirmed=True)
                 command('app.quit')
                 app.wait(timeout=10)
             except Exception:
                 app.terminate(); app.wait(timeout=10)
-        subprocess.run([str(Path.home() / '.local/bin/hc'), 'server', 'stop'], env=env, capture_output=True, timeout=10)
+        # Stopping the core preserves terminal programs. End only this test's
+        # terminal first, even if the preview failed before it could close space.
+        cleanup = {}
+        if space:
+            terminal = subprocess.run([str(Path.home() / '.local/bin/hc'), 'kill', space['terminal'], '--json'], env=env, capture_output=True, text=True, timeout=10)
+            cleanup['terminal'] = {'code': terminal.returncode, 'stdout': terminal.stdout, 'stderr': terminal.stderr}
+        stopped = subprocess.run([str(Path.home() / '.local/bin/hc'), 'server', 'stop', '--json'], env=env, capture_output=True, text=True, timeout=10)
+        cleanup['core'] = {'code': stopped.returncode, 'stdout': stopped.stdout, 'stderr': stopped.stderr}
+        (work / 'cleanup.json').write_text(json.dumps(cleanup, indent=2))
+        assert stopped.returncode == 0, cleanup
         server.shutdown()
         log.close()
         print(f'Evidence: {work}', flush=True)
