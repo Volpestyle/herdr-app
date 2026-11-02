@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real in-process CEF control proof; scratch app home/core, non-activating window.
 
-Run through clankie heavy --server -- python3 personal/agent_control_smoke.py.
+Run through clankie heavy -- python3 personal/agent_control_smoke.py.
 No debugging port or OS pointer/key automation. Never launches the installed app.
 """
 import argparse
@@ -36,8 +36,11 @@ def main():
     parser.add_argument('--binary', default=str(ROOT / '.local/preview/Herdr Browser.app/Contents/MacOS/HerdrBrowser'))
     args = parser.parse_args()
     work = ROOT / '.local/agent-control-smoke' / str(time.time_ns())
-    home = work / 'home'
-    home.mkdir(parents=True)
+    # macOS sockaddr_un paths are limited to 104 bytes; task worktrees are longer.
+    home = Path('/tmp') / f'hb-agent-{os.getpid()}-{work.name}'
+    work.mkdir(parents=True)
+    home.mkdir()
+    home = home.resolve()
     (home / 'shared.json').write_text('{"frame.welcomed":"finished"}')
     (home / 'settings.json').write_text(json.dumps({'sounds': {'enabled': False}, 'telemetry': False, 'core': str(Path.home() / '.local/bin/hc')}))
 
@@ -56,7 +59,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env = os.environ.copy()
     env.update(HERDR_APP_HOME=str(home), HC_SESSION=f'hb-agent-{os.getpid()}', HERDR_APP_BACKGROUND='1', HERDR_BROWSER_TEST_KEYCHAIN=f'Herdr Browser Agent QA {work.name}', HERDR_TELEMETRY='0')
-    for name in ['HERDR_BROWSER_DEBUG_PORT', 'HERDR_BROWSER_TEST_WINDOW_FRONT', 'HC_TERMINAL_ID']:
+    for name in ['HERDR_BROWSER_DEBUG_PORT', 'HERDR_BROWSER_TEST_WINDOW_FRONT', 'HC_TERMINAL_ID', 'HERDR_PANE_ID']:
         env.pop(name, None)
     binary = str(Path(args.binary).resolve())
     assert '/.local/' in binary and not binary.startswith(str(Path.home() / 'Applications/'))
@@ -65,17 +68,19 @@ def main():
     app = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
     transcript = []
 
-    def command(name, expect_error=None, caller='qa-terminal-a', **kwargs):
+    def command(command_name, expect_error=None, expect_timeout=False, caller='qa-terminal-a', caller_key='HC_TERMINAL_ID', **kwargs):
         cli_env = env.copy()
-        if caller is not None: cli_env['HC_TERMINAL_ID'] = caller
-        result = subprocess.run([binary, 'do', name, json.dumps(kwargs)], env=cli_env, text=True, capture_output=True, timeout=45)
+        if caller is not None: cli_env[caller_key] = caller
+        result = subprocess.run([binary, 'do', command_name, json.dumps(kwargs)], env=cli_env, text=True, capture_output=True, timeout=45)
         try: value = json.loads(result.stdout)
-        except Exception: raise RuntimeError(f'{name}: {result.stderr}')
-        transcript.append({'command': name, 'args': kwargs, 'caller': caller, 'result': value})
+        except Exception: raise RuntimeError(f'{command_name}: {result.stderr}')
+        transcript.append({'command': command_name, 'args': kwargs, 'caller': caller, 'result': value})
         if expect_error:
             assert expect_error in value.get('error', ''), value
         else:
             assert result.returncode == 0 and 'error' not in value, value
+            if expect_timeout: assert value.get('timeout') is True, value
+            else: assert not value.get('timeout'), value
         assert front() == before, 'Scratch app changed the frontmost application'
         return value
 
@@ -104,6 +109,7 @@ def main():
             time.sleep(.1)
             try:
                 state = command('browser.inspect')
+                if state.get('page_error'): raise RuntimeError(state['page_error'])
                 if state['title'] == 'Agent control fixture' and not state['loading']: break
             except AssertionError:
                 if time.monotonic() >= deadline: raise
@@ -111,12 +117,13 @@ def main():
         assert state['native']['window_key'] is False, state
         listeners = subprocess.run(['/usr/sbin/lsof', '-nP', '-a', '-p', str(app.pid), '-iTCP', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
         assert not listeners.strip(), listeners
+        assert command('browser.read', caller_key='HERDR_PANE_ID')['pane'] == pane
         assert state['profile'] == 'agent'
         assert 'profile_marker=agent-only' in command('browser.read')['text']
         command('browser.wait', load=True)
         command('browser.wait', text='Agent control fixture')
         command('browser.wait', url='127.0.0.1')
-        assert command('browser.wait', text='missing text', timeout=100)['timeout']
+        assert command('browser.wait', text='missing text', timeout=100, expect_timeout=True)['timeout']
         snap = command('browser.snapshot')
         click = ref(snap, 'button', 'Click me')
         command('browser.click', ref=click)
@@ -124,7 +131,9 @@ def main():
         command('browser.click', ref=click, expect_error='snapshot again')
         snap = command('browser.snapshot')
         field = ref(snap, 'textbox', 'Name ')
-        command('browser.type', ref=field, text='Background CEF input', submit=True)
+        command('browser.type', ref=field, text='discard this value')
+        snap = command('browser.snapshot')
+        command('browser.type', ref=ref(snap, 'textbox', 'Name'), text='Background CEF input', submit=True)
         command('browser.wait', text='Submitted: Background CEF input')
         assert 'Submitted: Background CEF input' in command('browser.read', format='markdown')['text']
         snap = command('browser.snapshot')

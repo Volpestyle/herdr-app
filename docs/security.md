@@ -52,7 +52,7 @@ a password field is active. Sign-ins belong in the sign-in vault flow; these
 commands do not implement that vault or expose its secrets.
 
 Without an explicit pane, a terminal caller targets only the last browser it
-opened, using `HC_TERMINAL_ID`, never UI focus. This caller field is routing,
+opened, using `HC_TERMINAL_ID` or `HERDR_PANE_ID`, never UI focus. This caller field is routing,
 not proof of identity. Unknown or closed targets are errors. Snapshot refs are
 local to a browser and its generation and expire on DOM mutations or navigation;
 an isolated JavaScript world observes the document without sharing the page's

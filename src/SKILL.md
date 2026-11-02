@@ -141,7 +141,7 @@ The + menu's Browser item uses it. It runs on this Mac even in a remote space.
 `browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
 `browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`
 and `browser.inspect {pane?}` address an explicit pane. From a terminal, omitting
-`pane` targets the browser that terminal opened most recently (`HC_TERMINAL_ID`),
+`pane` targets the browser that terminal opened most recently (`HC_TERMINAL_ID`, or `HERDR_PANE_ID`),
 never the focused pane. With no caller mapping, pass `pane` explicitly. Mappings
 last until the app closes; a closed target is an error, never a focus fallback.
 The + menu and keyboard shortcuts still target the person's focused browser.

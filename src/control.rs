@@ -98,7 +98,8 @@ pub fn client(args: &[String]) -> i32 {
     };
     // A caller identifies the terminal that opened its page, never whichever
     // pane the person currently has focused. This is routing, not authentication.
-    if let Ok(terminal) = std::env::var("HC_TERMINAL_ID") {
+    if let Some(terminal) = ["HC_TERMINAL_ID", "HERDR_PANE_ID"].into_iter()
+        .filter_map(|key| std::env::var(key).ok()).find(|value| !value.is_empty()) {
         if !terminal.is_empty() { cmd["caller_terminal"] = terminal.into(); }
     }
     let mut stream = match UnixStream::connect(socket()) {

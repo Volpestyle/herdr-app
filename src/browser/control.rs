@@ -323,6 +323,23 @@ impl Control {
         if self.evaluate("(() => { let e=document.activeElement; while(e?.shadowRoot?.activeElement) e=e.shadowRoot.activeElement; return !!e?.matches('input[type=password],iframe,frame,object,embed'); })()", ex).await? == true {
             return Err("Password fields require the sign-in vault".into());
         }
+        let tree = self
+            .call("Accessibility.getFullAXTree", json!({}), ex)
+            .await?;
+        if let Some(nodes) = tree["nodes"].as_array() {
+            for node in nodes {
+                let focused = node["properties"].as_array().is_some_and(|properties| {
+                    properties
+                        .iter()
+                        .any(|p| p["name"] == "focused" && p["value"]["value"] == true)
+                });
+                if focused {
+                    if let Some(id) = node["backendDOMNodeId"].as_i64() {
+                        self.field(id, ex).await?;
+                    }
+                }
+            }
+        }
         let mut modifiers = 0;
         let parts: Vec<_> = key.split('+').collect();
         for part in &parts[..parts.len() - 1] {
@@ -353,7 +370,12 @@ impl Control {
         } else {
             String::new()
         };
-        self.call("Input.dispatchKeyEvent", json!({"type":"keyDown","key":key,"code":code,"windowsVirtualKeyCode":vk,"modifiers":modifiers,"text":text}), ex).await?;
+        let commands: Vec<&str> = if modifiers == 4 && key.eq_ignore_ascii_case("a") {
+            vec!["selectAll"]
+        } else {
+            vec![]
+        };
+        self.call("Input.dispatchKeyEvent", json!({"type":"keyDown","key":key,"code":code,"windowsVirtualKeyCode":vk,"modifiers":modifiers,"text":text,"commands":commands}), ex).await?;
         self.call("Input.dispatchKeyEvent", json!({"type":"keyUp","key":key,"code":code,"windowsVirtualKeyCode":vk,"modifiers":modifiers}), ex).await?;
         Ok(())
     }
@@ -375,7 +397,8 @@ impl Control {
                 self.call("DOM.enable", json!({}), ex).await?;
                 // Request all descendants so native DOM events also cover closed
                 // shadow roots and frame documents, outside a document observer.
-                self.call("DOM.getDocument", json!({"depth":-1,"pierce":true}), ex).await?;
+                self.call("DOM.getDocument", json!({"depth":-1,"pierce":true}), ex)
+                    .await?;
                 let before = self.version(ex).await?;
                 self.call("Accessibility.enable", json!({}), ex).await?;
                 let tree = self
@@ -608,7 +631,10 @@ impl Control {
                 let path = dir.join(format!(
                     "browser-{}-{}.png",
                     std::process::id(),
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos()
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| e.to_string())?
+                        .as_nanos()
                 ));
                 use std::io::Write;
                 let mut file = std::fs::OpenOptions::new()

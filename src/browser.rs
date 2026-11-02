@@ -32,6 +32,7 @@ pub const MOD: &str = "native-browser";
 
 #[derive(Debug)]
 pub enum Event {
+    Ready,
     Loading(String),
     Loaded(String),
     Title(String),
@@ -154,6 +155,7 @@ impl Browser {
 
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            Event::Ready => {}
             Event::Loading(url) => {
                 self.loading = true;
                 self.url = url;
@@ -298,16 +300,30 @@ impl Browser {
         self.check_access(args)?;
         #[cfg(target_os = "macos")]
         {
-            let control = self
-                .host
-                .as_ref()
-                .ok_or("Chromium is unavailable")?
-                .control()?;
+            let host = Rc::downgrade(self.host.as_ref().ok_or("Chromium is unavailable")?);
             let name = name.to_string();
             let args = args.clone();
             let pane = self.pane.clone();
             cx.spawn(async move |_, cx| {
-                let result = control.run(&name, &args, cx.background_executor()).await;
+                let result = async {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                    let control = loop {
+                        let page = host.upgrade().ok_or("Browser pane was closed")?;
+                        if page.starting() {
+                            if std::time::Instant::now() >= deadline {
+                                return Err("Browser is still starting; try again".into());
+                            }
+                            drop(page);
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(25))
+                                .await;
+                        } else {
+                            break page.control()?;
+                        }
+                    };
+                    control.run(&name, &args, cx.background_executor()).await
+                }
+                .await;
                 let value = match result {
                     Ok(mut value) => {
                         value["pane"] = pane.into();
