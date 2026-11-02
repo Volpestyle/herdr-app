@@ -688,14 +688,18 @@ impl Control {
                 Ok(json!({"ok":true}))
             }
             "browser.signin" => {
-                let item = args["item"]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty() && !s.starts_with('-'))
-                    .ok_or("item is required")?
-                    .to_string();
+                let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
                 self.page_host(ex).await?;
-                let login = ex.spawn(async move { one_password(&item) }).await?;
+                let login = match (text("item"), text("env_file")) {
+                    (Some(item), None) if !item.starts_with('-') => ex.spawn(async move { one_password(&item) }).await?,
+                    (None, Some(file)) => {
+                        let user = text("user_key").ok_or("env_file needs user_key")?;
+                        let password = text("password_key").ok_or("env_file needs password_key")?;
+                        let site = text("site").ok_or("env_file needs site, the host it may fill (e.g. localhost)")?;
+                        env_login(&file, &user, &password, &site)?
+                    }
+                    _ => return Err("Pass exactly one of item (1Password) or env_file".into()),
+                };
                 let mut filled = Vec::new();
                 if let Some(field) = self.login_field(false, ex).await? {
                     self.fill(field, &login.urls, &login.username, ex).await?;
@@ -881,4 +885,21 @@ fn one_password(item: &str) -> Result<Login, String> {
         return Err(format!("1Password item {item:?} lists no website; add one so sign-in knows where it may fill"));
     }
     Ok(Login { username: field("USERNAME"), password: field("PASSWORD"), urls })
+}
+
+/// Test credentials from a dotenv file; `site` stands in for a 1Password item's websites.
+fn env_login(file: &str, user_key: &str, password_key: &str, site: &str) -> Result<Login, String> {
+    let body = std::fs::read_to_string(file).map_err(|e| format!("Cannot read {file}: {e}"))?;
+    let value = |key: &str| {
+        body.lines()
+            .filter_map(|line| line.trim().trim_start_matches("export ").split_once('='))
+            .find(|(k, _)| k.trim() == key)
+            .map(|(_, v)| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+            .ok_or(format!("{file} has no {key}"))
+    };
+    Ok(Login {
+        username: value(user_key)?,
+        password: value(password_key)?,
+        urls: vec![site.trim().to_ascii_lowercase()],
+    })
 }

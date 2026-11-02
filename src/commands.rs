@@ -40,7 +40,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("browser.read", &[opt("pane"), opt("format"), opt("confirmed")], "Read up to 20000 characters of visible text (text or plain Markdown)."),
     cmd("browser.click", &[opt("ref"), opt("name"), opt("role"), opt("nth"), opt("pane"), opt("confirmed")], "Click a snapshot ref, or the element with this exact accessible name (role/nth disambiguate), using page input only."),
     cmd("browser.type", &[opt("ref"), opt("name"), opt("role"), opt("nth"), req("text"), opt("submit"), opt("pane"), opt("confirmed")], "Replace an editable field (ref, or its accessible name) using page input. Password fields are refused; use browser.signin."),
-    cmd("browser.signin", &[req("item"), opt("pane"), opt("confirmed")], "Fill and submit the page's login form from a 1Password item via `op`, only when the item lists this site. Secrets never leave the app."),
+    cmd("browser.signin", &[opt("item"), opt("env_file"), opt("user_key"), opt("password_key"), opt("site"), opt("pane"), opt("confirmed")], "Fill and submit the page's login form from a 1Password item via `op` (only on a site the item lists), or from env_file's user_key/password_key values on site (test credentials). Values never leave the app."),
     cmd("browser.press", &[req("key"), opt("pane"), opt("confirmed")], "Send a page key/chord, e.g. Enter or Ctrl+a, without desktop input."),
     cmd("browser.scroll", &[opt("ref"), opt("name"), opt("role"), opt("nth"), opt("dy"), opt("pane"), opt("confirmed")], "Scroll a snapshot ref into view or the page by dy CSS pixels."),
     cmd("browser.wait", &[opt("text"), opt("url"), opt("load"), opt("timeout"), opt("pane"), opt("confirmed")], "Wait for visible text, URL substring, or load: true; timeout in ms (max 120000)."),

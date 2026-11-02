@@ -161,6 +161,12 @@ def main():
         command('browser.type', ref=password, text='must never be inserted', expect_error='Password fields')
         command('browser.click', ref=password)
         command('browser.press', key='x', expect_error='Password fields')
+        creds = work / 'test.env'
+        creds.write_text('QA_USER=qa@example.com\nQA_PASS="from env file"\n')
+        signin = dict(env_file=str(creds), user_key='QA_USER', password_key='QA_PASS')
+        command('browser.signin', site='example.com', expect_error='refusing to fill', **signin)
+        assert command('browser.signin', site='127.0.0.1', **signin)['filled'] == ['password']
+        command('browser.signin', expect_error='needs site', **signin)
         # A newer snapshot replaces the previous one's refs.
         old = ref(snap, 'button', 'Click me')
         scoped = command('browser.snapshot', scope='main')

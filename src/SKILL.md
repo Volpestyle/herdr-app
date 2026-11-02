@@ -182,6 +182,8 @@ Page commands return their result through `herdr-browser do`:
   1Password item. The app runs `op` itself (the person approves with Touch ID), and
   fills only while the page's host matches a website on the item; values never
   appear in replies, argv or logs. Handles username-then-password pages.
+  For checked-in test credentials, `browser.signin {env_file, user_key, password_key, site}`
+  reads the two values from a dotenv file instead and fills only on `site` (a host).
 - `browser.press {pane?, key}`: a page key such as Enter, Tab, Escape,
   ArrowDown, or a character/chord such as `Meta+a`. Password input is refused.
 - `browser.scroll {pane?, ref? | name | dy}`: scroll an element into view or wheel the
