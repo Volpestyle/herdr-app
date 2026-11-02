@@ -79,6 +79,7 @@ impl Control {
         Ok(Self {
             host,
             pending,
+            epoch,
             next_id: Cell::new(0),
             _registration: registration,
             snapshot: RefCell::new(Snapshot::default()),
@@ -576,7 +577,9 @@ impl Control {
                     } else {
                         "document.readyState === 'complete'".into()
                     };
-                    if self.evaluate(&condition, ex).await? == true {
+                    // A navigation can destroy a context between polling reads.
+                    // Only reads are retried; input commands are never replayed.
+                    if self.evaluate(&condition, ex).await.is_ok_and(|v| v == true) {
                         return Ok(json!({"ok":true}));
                     }
                     if Instant::now() >= deadline {
@@ -605,7 +608,7 @@ impl Control {
                 let path = dir.join(format!(
                     "browser-{}-{}.png",
                     std::process::id(),
-                    self.next_id.get()
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos()
                 ));
                 use std::io::Write;
                 let mut file = std::fs::OpenOptions::new()
