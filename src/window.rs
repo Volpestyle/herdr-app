@@ -1427,13 +1427,20 @@ impl AppWindow {
 
         // A mod copy lives while its slot is in the layout, hidden or not (an
         // inactive stack child, a hidden column, a pane in another tab), so it
-        // keeps its place; only shown slots start a copy. Gone or changed: dropped.
+        // keeps its place; only shown slots start a copy, except native browsers,
+        // which start hidden so agents can drive a pane in a tab nobody is viewing.
+        // Gone or changed: dropped.
         let owned = self.owned_mods();
         let gone: Vec<_> = self.copies.iter().filter(|(slot, copy)| owned.get(*slot).is_none_or(|inst| *inst != copy.inst)).map(|(slot, _)| slot.clone()).collect();
         for slot in gone {
             self.remove_copy(&slot, window, cx);
         }
-        let want: HashMap<String, Instance> = mods_visible.into_iter().collect();
+        let mut want: HashMap<String, Instance> = mods_visible.into_iter().collect();
+        for (slot, inst) in &owned {
+            if inst.name == crate::browser::MOD && !want.contains_key(slot) {
+                want.insert(slot.clone(), inst.clone());
+            }
+        }
         for (slot, inst) in want {
             if !self.copies.contains_key(&slot) {
                 let copy = self.load(inst, &slot, window, cx);

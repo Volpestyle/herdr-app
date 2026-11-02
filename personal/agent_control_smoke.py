@@ -190,6 +190,22 @@ def main():
         command('browser.navigate', url=url + 'next')
         command('browser.wait', text='Navigation complete')
         command('browser.click', ref=old, expect_error='snapshot again')
+        # A browser split into a tab nobody is viewing still starts and takes commands.
+        listing = json.loads(subprocess.run([binary, 'ls'], env=env, text=True, capture_output=True).stdout)
+        scratch = next(t['pane'] for s in listing['spaces'] if s['id'] == space['space'] for tab in s['tabs'] if tab['name'] == 'Scratch terminal' for t in tab['terminals'])
+        command('tab.new', name='Elsewhere', space=space['space'])
+        hidden = command('browser.split', pane=scratch, profile='agent', url=url, caller='qa-terminal-c')['pane']
+        deadline = time.monotonic() + 30
+        while True:
+            time.sleep(.1)
+            try:
+                if command('browser.inspect', pane=hidden)['title'] == 'Agent control fixture': break
+            except AssertionError:
+                pass
+            assert time.monotonic() < deadline, f'Hidden browser did not start: {work}'
+        command('browser.click', pane=hidden, name='Click me')
+        assert 'Clicked safely' in command('browser.read', pane=hidden)['text']
+        command('pane.close', pane=hidden)
         command('pane.close', pane=pane)
         time.sleep(.2)
         command('browser.read', expect_error='No native browser')
