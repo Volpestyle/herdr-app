@@ -250,6 +250,28 @@ pub fn start() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The agent cache is a sibling of Default under CEF's root cache. CEF reuses
+/// contexts with the same cache path; cookies/storage never share Default.
+pub fn request_context(profile: &str) -> anyhow::Result<Option<RequestContext>> {
+    match profile {
+        "person" => Ok(None),
+        "agent" => {
+            let path = crate::mods::app_dir().join("chromium/Agent");
+            std::fs::create_dir_all(&path)?;
+            let settings = RequestContextSettings {
+                cache_path: path.to_string_lossy().as_ref().into(),
+                persist_session_cookies: 1,
+                ..Default::default()
+            };
+            Ok(Some(
+                request_context_create_context(Some(&settings), None)
+                    .ok_or_else(|| anyhow::anyhow!("Cannot create isolated agent profile"))?,
+            ))
+        }
+        _ => anyhow::bail!("profile must be person or agent"),
+    }
+}
+
 pub fn close(cell: &BrowserCell) {
     if let Some(browser) = cell.borrow_mut().take() {
         if ready() && browser.is_valid() != 0 {

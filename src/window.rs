@@ -375,6 +375,8 @@ pub struct AppWindow {
     terms: HashMap<String, Term>,
     /// Mod copies by slot (block id, `<stack>#header`, or `overlay:<id>`).
     copies: HashMap<String, Copy>,
+    /// Last browser opened by each terminal caller; never infer from UI focus.
+    browser_openers: HashMap<String, String>,
     overlays: Vec<Overlay>,
     folders: BTreeMap<String, Found>,
     /// Mods placed once; later the layout decides where (or whether) they show.
@@ -471,6 +473,7 @@ impl AppWindow {
             model: Model::default(),
             terms: HashMap::new(),
             copies: HashMap::new(),
+            browser_openers: HashMap::new(),
             overlays: Vec::new(),
             folders: mods::scan().into_iter().map(|f| (f.id.clone(), f)).collect(),
             seen,
@@ -2669,7 +2672,12 @@ impl AppWindow {
                 let url = match crate::browser::address(Self::arg(a, "url").unwrap_or("https://www.google.com")) {
                     Ok(url) => url, Err(error) => return self.fail(error),
                 };
-                let props = json!({"url":url});
+                let profile = Self::arg(a, "profile").unwrap_or("person");
+                if !matches!(profile, "person" | "agent") { return self.fail("profile must be person or agent"); }
+                let props = json!({"url":url,"profile":profile});
+                if !person && matches!(Self::arg(a, "place"), Some("right" | "down")) && Self::arg(a, "pane").is_none() {
+                    return self.fail("Pass the pane to split explicitly; focused panes are never implicit agent targets");
+                }
                 let result = match Self::arg(a, "place") {
                     Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
                     Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
@@ -2678,11 +2686,14 @@ impl AppWindow {
                 };
                 self.answer(result);
             }
-            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" => {
-                let pane = Self::owned(a, "pane").or_else(|| self.model.focused_pane());
+            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.snapshot" | "browser.read" | "browser.click" | "browser.type" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" => {
+                let pane = Self::owned(a, "pane").or_else(|| person.then(|| self.model.focused_pane()).flatten());
                 let view = pane.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.clone());
                 let Some(view) = view else { return self.fail("Focus a native browser pane or pass its pane id"); };
-                let result = view.update(cx, |v, cx| v.command(name, a, window, cx));
+                let result = view.update(cx, |v, cx| {
+                    if !person { v.check_access(a)?; }
+                    v.command(name, a, window, cx)
+                });
                 self.answer(result);
             }
             // ---- spaces
@@ -3446,8 +3457,39 @@ impl AppWindow {
             Request::OpenOverlay { id, spec } => self.open_overlay(id, spec, window, cx),
             Request::CloseOverlay { id } => self.close_overlay(&id, window, cx),
             Request::Refresh => self.refresh_mods(cx),
-            Request::Control { cmd, reply } => {
-                let _ = reply.send(self.control(cmd, window, cx));
+            Request::Control { mut cmd, reply } => {
+                let name = cmd["do"].as_str().unwrap_or("").to_string();
+                if name.starts_with("browser.") {
+                    let caller = cmd["caller_terminal"].as_str().map(str::to_owned);
+                    if !cmd["args"].is_object() { cmd["args"] = json!({}); }
+                    if name != "browser.open" && cmd["args"].get("pane").is_none() {
+                        let pane = caller.as_ref().and_then(|c| self.browser_openers.get(c));
+                        let Some(pane) = pane else {
+                            let _ = reply.send(json!({"error":"Pass pane explicitly or open a browser from this terminal first; focused panes are never implicit targets"}));
+                            return;
+                        };
+                        cmd["args"]["pane"] = pane.clone().into();
+                    }
+                    if crate::browser::is_page_command(&name) {
+                        let args = &cmd["args"];
+                        let result = (|| -> Result<(), String> {
+                            let command = crate::commands::find(&name).ok_or("Unknown browser command")?;
+                            crate::commands::validate_args(command, args)?;
+                            if let Some(arg) = crate::commands::missing(command, args) { return Err(format!("{name} needs {arg}")); }
+                            let view = args["pane"].as_str().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.as_ref()).ok_or("No native browser at this pane; it may be closed")?;
+                            view.update(cx, |view, cx| view.page_command(&name, args, Some(reply.clone()), cx))
+                        })();
+                        if let Err(error) = result { let _ = reply.send(json!({"error":error})); }
+                        return;
+                    }
+                    let value = self.control(cmd, window, cx);
+                    if name == "browser.open" {
+                        if let (Some(caller), Some(pane)) = (caller, value["pane"].as_str()) { self.browser_openers.insert(caller, pane.into()); }
+                    }
+                    let _ = reply.send(value);
+                } else {
+                    let _ = reply.send(self.control(cmd, window, cx));
+                }
             }
         }
     }

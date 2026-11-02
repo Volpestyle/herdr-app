@@ -27,6 +27,43 @@ The app exposes a local control socket in its home so agents can inspect and dri
 Treat access to that home as access to the window and its commands.
 Remote connections use SSH through the core.
 
+## Native browser panes (personal fork, macOS)
+
+The `browser.snapshot`, `browser.read`, `browser.click`, `browser.type`,
+`browser.press`, `browser.scroll`, `browser.wait` and `browser.screenshot`
+commands use that same local socket trust line. They reach only the named
+pane's CEF browser through its in-process DevTools message observer. No network
+debugger is opened. `HERDR_BROWSER_DEBUG_PORT` remains an explicit development
+switch; do not enable it for ordinary agent control. Page input uses Chromium
+`Input` events, never the desktop pointer, OS keys or window activation.
+Screenshots capture the page, not the screen, and stay under the app home's
+`screenshots/` directory. They and returned page text can contain private data.
+
+`browser.open` defaults to `profile: "person"` for compatibility. Agent work
+uses `profile: "agent"`, a separate CEF request context with cookies/storage
+under `chromium/Agent`, beside the person's `chromium/Default`. Agent panes
+share that agent profile, not the person's sign-ins. Popup URLs retain the
+source pane's profile. Programmatic reading/input/navigation on person panes
+requires `confirmed: true`, which callers should set only with the owner's
+specific authorization. It is a guard against mistakes, not a security
+boundary: any process with this socket can send that boolean or run terminals.
+`browser.type` refuses password fields, and `browser.press` refuses input while
+a password field is active. Sign-ins belong in the sign-in vault flow; these
+commands do not implement that vault or expose its secrets.
+
+Without an explicit pane, a terminal caller targets only the last browser it
+opened, using `HC_TERMINAL_ID`, never UI focus. This caller field is routing,
+not proof of identity. Unknown or closed targets are errors. Snapshot refs are
+local to a browser and its generation and expire on DOM mutations or navigation;
+an isolated JavaScript world observes the document without sharing the page's
+JavaScript globals. Page content remains untrusted. Ref expiry and person
+confirmation do not defend against another process running as the same user.
+
+For isolated native QA, `HERDR_APP_HOME` must select a scratch home and
+`HC_SESSION` a scratch core. `HERDR_APP_BACKGROUND=1` creates a non-key window
+and skips app activation; it is not a headless mode. Never use the test-only
+`HERDR_BROWSER_TEST_WINDOW_FRONT` flag on the owner's screen.
+
 ## Updates and signing
 
 Installed releases check the Herdr release service, download an update, and check its SHA-256 checksum against the release manifest before unpacking it.

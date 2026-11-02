@@ -134,6 +134,7 @@ wrap_client! {
 }
 pub struct Host {
     browser: runtime::BrowserCell,
+    control: RefCell<Option<Rc<super::control::Control>>>,
     container: Retained<NSView>,
     parent: Retained<NSView>,
     window: Retained<NSWindow>,
@@ -185,6 +186,7 @@ fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
 impl Host {
     pub fn new(
         url: &str,
+        profile: &str,
         allowed: Rc<Cell<bool>>,
         tx: Tx,
         window: &GpuiWindow,
@@ -229,13 +231,14 @@ impl Host {
         );
         let focus_gate = Arc::new(AtomicBool::new(false));
         let mut client = PageClient::new(tx.clone(), focus_gate.clone());
+        let mut context = runtime::request_context(profile)?;
         let browser = browser_host_create_browser_sync(
             Some(&info),
             Some(&mut client),
             Some(&url.into()),
             Some(&BrowserSettings::default()),
             None,
-            None,
+            context.as_mut(),
         )
         .ok_or_else(|| anyhow::anyhow!("Chromium could not create a native browser"))?;
         let browser = Rc::new(RefCell::new(Some(browser)));
@@ -333,6 +336,7 @@ impl Host {
         };
         Ok(Self {
             browser,
+            control: RefCell::new(None),
             container,
             parent,
             window: native_window,
@@ -343,6 +347,17 @@ impl Host {
             focus_gate,
             monitor,
         })
+    }
+    pub fn control(&self) -> Result<Rc<super::control::Control>, String> {
+        if let Some(control) = self.control.borrow().as_ref() {
+            return Ok(control.clone());
+        }
+        let browser = self.browser.borrow();
+        let control = Rc::new(super::control::Control::new(
+            browser.as_ref().ok_or("Browser is closed")?,
+        )?);
+        *self.control.borrow_mut() = Some(control.clone());
+        Ok(control)
     }
     fn native_view(&self) -> Option<&NSView> {
         let browser = self.browser.borrow();
@@ -479,9 +494,16 @@ mod tests {
     }
     #[test]
     fn browser_and_sidebar_shortcuts_match_the_global_keymap() {
-        let keys: serde_json::Value = serde_json::from_str(include_str!("../../defaults/keys.macos.json")).unwrap();
-        assert_eq!(shortcut("b", false, false), keys["global"]["cmd-b"].as_str());
-        assert_eq!(shortcut("b", false, true), keys["global"]["cmd-alt-b"].as_str());
+        let keys: serde_json::Value =
+            serde_json::from_str(include_str!("../../defaults/keys.macos.json")).unwrap();
+        assert_eq!(
+            shortcut("b", false, false),
+            keys["global"]["cmd-b"].as_str()
+        );
+        assert_eq!(
+            shortcut("b", false, true),
+            keys["global"]["cmd-alt-b"].as_str()
+        );
         assert_eq!(shortcut("l", false, true), None);
     }
 }

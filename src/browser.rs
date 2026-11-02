@@ -8,9 +8,25 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 #[cfg(target_os = "macos")]
+mod control;
+#[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 pub mod runtime;
+
+pub fn is_page_command(name: &str) -> bool {
+    matches!(
+        name,
+        "browser.snapshot"
+            | "browser.read"
+            | "browser.click"
+            | "browser.type"
+            | "browser.press"
+            | "browser.scroll"
+            | "browser.wait"
+            | "browser.screenshot"
+    )
+}
 
 pub const MOD: &str = "native-browser";
 
@@ -61,6 +77,7 @@ pub fn address(input: &str) -> Result<String, String> {
 
 pub struct Browser {
     pane: String,
+    profile: String,
     input: Entity<InputState>,
     url: String,
     title: String,
@@ -93,13 +110,19 @@ impl Browser {
                 this.focus_page();
             }
         });
+        let profile = props
+            .get("profile")
+            .and_then(Value::as_str)
+            .unwrap_or("person")
+            .to_string();
         let (tx, rx) = async_channel::unbounded();
         let allowed = Rc::new(Cell::new(false));
         #[cfg(target_os = "macos")]
-        let (host, error) = match macos::Host::new(&url, allowed.clone(), tx.clone(), window) {
-            Ok(h) => (Some(Rc::new(h)), None),
-            Err(e) => (None, Some(format!("Cannot start Chromium: {e:#}"))),
-        };
+        let (host, error) =
+            match macos::Host::new(&url, &profile, allowed.clone(), tx.clone(), window) {
+                Ok(h) => (Some(Rc::new(h)), None),
+                Err(e) => (None, Some(format!("Cannot start Chromium: {e:#}"))),
+            };
         #[cfg(not(target_os = "macos"))]
         let error = Some("Native browser panes currently require macOS.".into());
         let events = cx.spawn_in(window, async move |this, cx| {
@@ -114,6 +137,7 @@ impl Browser {
         });
         Self {
             pane: pane.into(),
+            profile,
             input,
             url,
             title: "Browser".into(),
@@ -150,7 +174,7 @@ impl Browser {
             Event::Open(url) => {
                 crate::mods::request(crate::mods::Request::Run {
                     name: "browser.open".into(),
-                    args: json!({"url":url}),
+                    args: json!({"url":url,"profile":self.profile}),
                 });
             }
             Event::Command(command) => {
@@ -248,12 +272,63 @@ impl Browser {
     }
 
     pub fn inspect(&self) -> Value {
-        let mut out = json!({"engine":"Chromium/CEF", "pane":self.pane, "url":self.url, "title":self.title, "loading":self.loading, "page_error":self.error, "notice":self.notice, "visible":self.allowed.get()});
+        let mut out = json!({"engine":"Chromium/CEF", "pane":self.pane, "profile":self.profile, "url":self.url, "title":self.title, "loading":self.loading, "page_error":self.error, "notice":self.notice, "visible":self.allowed.get()});
         #[cfg(target_os = "macos")]
         if let Some(host) = &self.host {
             out["native"] = host.inspect();
         }
         out
+    }
+
+    pub fn check_access(&self, args: &Value) -> Result<(), String> {
+        if self.profile != "agent" && args["confirmed"] != true {
+            return Err("This is a person-profile pane; owner authorization and confirmed: true are required".into());
+        }
+        Ok(())
+    }
+
+    /// Control replies wait asynchronously on CEF while the window keeps serving events.
+    pub fn page_command(
+        &self,
+        name: &str,
+        args: &Value,
+        reply: Option<std::sync::mpsc::Sender<Value>>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.check_access(args)?;
+        #[cfg(target_os = "macos")]
+        {
+            let control = self
+                .host
+                .as_ref()
+                .ok_or("Chromium is unavailable")?
+                .control()?;
+            let name = name.to_string();
+            let args = args.clone();
+            let pane = self.pane.clone();
+            cx.spawn(async move |_, cx| {
+                let result = control.run(&name, &args, cx.background_executor()).await;
+                let value = match result {
+                    Ok(mut value) => {
+                        value["pane"] = pane.into();
+                        value
+                    }
+                    Err(error) => json!({"error":error}),
+                };
+                if let Some(reply) = reply {
+                    let _ = reply.send(value);
+                } else if let Some(error) = value.get("error") {
+                    tracing::warn!("browser command: {error}");
+                }
+            })
+            .detach();
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (name, reply, cx);
+            Err("Native browsers require macOS".into())
+        }
     }
 
     pub fn command(
@@ -263,6 +338,10 @@ impl Browser {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
+        if is_page_command(command) {
+            self.page_command(command, args, None, cx)?;
+            return Ok(json!({"pending":true}));
+        }
         match command {
             "browser.navigate" => {
                 return self.navigate(
@@ -412,7 +491,11 @@ mod tests {
         browser.update_in(cx, |browser, window, cx| browser.focus_url(window, cx));
         cx.run_until_parked();
         cx.simulate_keystrokes("cmd-c");
-        assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some(url));
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some(url)
+        );
     }
 
     #[test]
