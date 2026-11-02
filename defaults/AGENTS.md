@@ -1020,16 +1020,23 @@ Page commands return their result through `herdr-browser do`:
   At most 1000 nodes, with names capped to 300 characters; `capped` says if cut.
 - `browser.read {pane?, format?: "text" | "markdown"}`: rendered visible text,
   URL and title, capped to 20000 characters. Markdown is escaped plain text.
-- `browser.click {pane?, ref}`: click a current snapshot element.
-- `browser.type {pane?, ref, text, submit?}`: replace a field's text, optionally
-  Enter to submit. Password fields are refused; use the sign-in vault instead.
+- `browser.click {pane?, ref? | name, role?, nth?}`: click a snapshot element, or
+  the one whose accessible name is exactly `name` (no snapshot needed). Without
+  `role` only interactive roles match; `role`/`nth` (1-based) pick among several.
+  Refs survive unrelated DOM churn and expire on navigation or node removal.
+- `browser.type {pane?, ref? | name, role?, nth?, text, submit?}`: replace a field's
+  text, optionally Enter to submit. Password fields are refused; use `browser.signin`.
+- `browser.signin {pane?, item}`: fill and submit the page's login form from a
+  1Password item. The app runs `op` itself (the person approves with Touch ID), and
+  fills only while the page's host matches a website on the item; values never
+  appear in replies, argv or logs. Handles username-then-password pages.
 - `browser.press {pane?, key}`: a page key such as Enter, Tab, Escape,
   ArrowDown, or a character/chord such as `Meta+a`. Password input is refused.
-- `browser.scroll {pane?, ref? | dy}`: scroll an element into view or wheel the
+- `browser.scroll {pane?, ref? | name | dy}`: scroll an element into view or wheel the
   page by `dy` CSS pixels; pass exactly one.
 - `browser.wait {pane?, text? | url? | load?, timeout?}`: wait for visible text,
   a URL substring or `load: true`. Pass exactly one condition. Timeout is in
-  milliseconds (default 5000, maximum 30000); returns `timeout: true` if unmet.
+  milliseconds (default 5000, maximum 120000); returns `timeout: true` if unmet.
 - `browser.screenshot {pane?}`: page-only PNG path under the app home's
   `screenshots/`, including when the window is not key. Before the first pane
   paint, Chromium uses a provisional viewport based on the window size; the
@@ -1046,6 +1053,8 @@ focuses a native window, or opens a network debugging port.
 herdr-browser do browser.open --profile agent --url http://localhost:3000
 herdr-browser do browser.snapshot
 herdr-browser do browser.click --ref e12
+herdr-browser do browser.type --name Email --text me@example.com
+herdr-browser do browser.signin --item "My Site"
 herdr-browser do browser.read --format markdown
 herdr-browser do browser.screenshot
 ```

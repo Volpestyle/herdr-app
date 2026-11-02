@@ -21,6 +21,7 @@ pub fn is_page_command(name: &str) -> bool {
             | "browser.read"
             | "browser.click"
             | "browser.type"
+            | "browser.signin"
             | "browser.press"
             | "browser.scroll"
             | "browser.wait"

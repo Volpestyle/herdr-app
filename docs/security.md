@@ -48,13 +48,18 @@ requires `confirmed: true`, which callers should set only with the owner's
 specific authorization. It is a guard against mistakes, not a security
 boundary: any process with this socket can send that boolean or run terminals.
 `browser.type` refuses password fields, and `browser.press` refuses input while
-a password field is active. Sign-ins belong in the sign-in vault flow; these
-commands do not implement that vault or expose its secrets.
+a password field is active. Sign-ins go through `browser.signin {item}`: the app
+runs the 1Password CLI itself (first use needs the person's approval), and fills
+only while the page host equals, or is a subdomain of, a website listed on that
+item, rechecked right before each value. Values are inserted as page input and
+never returned, logged or passed on argv; an agent can make the app sign in to a
+site the item belongs to, never read the secret.
 
 Without an explicit pane, a terminal caller targets only the last browser it
 opened, using `HC_TERMINAL_ID` or `HERDR_PANE_ID`, never UI focus. This caller field is routing,
 not proof of identity. Unknown or closed targets are errors. Snapshot refs are
-local to a browser and its generation and expire on DOM mutations or navigation;
+local to a browser and expire on navigation or when their node leaves the document
+(an unrelated DOM change no longer invalidates them);
 an isolated JavaScript world observes the document without sharing the page's
 JavaScript globals. Page content remains untrusted. Ref expiry and person
 confirmation do not defend against another process running as the same user.
