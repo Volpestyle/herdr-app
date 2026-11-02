@@ -168,22 +168,101 @@ impl Control {
     }
 
     async fn node(&self, args: &Value, ex: &BackgroundExecutor) -> Result<i64, String> {
-        let reference = args["ref"]
-            .as_str()
-            .ok_or("ref is required; snapshot again")?;
-        let (id, version) = {
+        let Some(reference) = args.get("ref").and_then(Value::as_str) else {
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or("Pass ref (from a snapshot) or name")?;
+            let role = args.get("role").and_then(Value::as_str);
+            return self.find(name, role, args.get("nth").and_then(Value::as_u64), ex).await;
+        };
+        let (id, url) = {
             let s = self.snapshot.borrow();
             (
                 *s.refs
                     .get(reference)
                     .ok_or("Unknown or stale ref; snapshot again")?,
-                s.version.clone(),
+                s.version["page"]["url"].clone(),
             )
         };
-        if self.version(ex).await? != version {
-            return Err("Page changed; snapshot again".into());
+        if self.version(ex).await?["page"]["url"] != url {
+            return Err("Page navigated; snapshot again".into());
         }
+        self.connected(id, ex).await?;
         Ok(id)
+    }
+
+    async fn connected(&self, node: i64, ex: &BackgroundExecutor) -> Result<(), String> {
+        let target = self
+            .call(
+                "DOM.resolveNode",
+                json!({"backendNodeId":node,"executionContextId":self.context(ex).await?}),
+                ex,
+            )
+            .await
+            .map_err(|_| "Element disappeared; snapshot again")?;
+        let object = target["object"]["objectId"]
+            .as_str()
+            .ok_or("Element disappeared; snapshot again")?;
+        let live = self
+            .call(
+                "Runtime.callFunctionOn",
+                json!({"objectId":object,"functionDeclaration":"function() { return this.isConnected; }","returnByValue":true}),
+                ex,
+            )
+            .await?;
+        self.call("Runtime.releaseObject", json!({"objectId":object}), ex)
+            .await?;
+        if live["result"]["value"] != true {
+            return Err("Element disappeared; snapshot again".into());
+        }
+        Ok(())
+    }
+
+    async fn find(
+        &self,
+        name: &str,
+        role: Option<&str>,
+        nth: Option<u64>,
+        ex: &BackgroundExecutor,
+    ) -> Result<i64, String> {
+        const INTERACTIVE: &[&str] = &[
+            "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch",
+            "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "slider",
+            "spinbutton", "listbox", "treeitem",
+        ];
+        self.call("Accessibility.enable", json!({}), ex).await?;
+        let tree = self
+            .call("Accessibility.getFullAXTree", json!({}), ex)
+            .await?;
+        let want = name.trim();
+        let matches: Vec<(&str, i64)> = tree["nodes"]
+            .as_array()
+            .ok_or("No accessibility tree")?
+            .iter()
+            .filter(|n| n["ignored"] != true)
+            .filter_map(|n| {
+                let r = n["role"]["value"].as_str()?;
+                let found = n["name"]["value"].as_str()?.trim() == want
+                    && role.map_or(INTERACTIVE.contains(&r), |w| w.eq_ignore_ascii_case(r));
+                Some((r, n["backendDOMNodeId"].as_i64()?)).filter(|_| found)
+            })
+            .collect();
+        match (matches.len(), nth) {
+            (0, _) => Err(format!(
+                "No {} named {want:?}; snapshot to see what is there",
+                role.unwrap_or("interactive element")
+            )),
+            (count, Some(n)) => matches
+                .get((n as usize).wrapping_sub(1))
+                .map(|m| m.1)
+                .ok_or_else(|| format!("nth is 1-based; {count} elements match {want:?}")),
+            (1, None) => Ok(matches[0].1),
+            (count, None) => Err(format!(
+                "{count} elements named {want:?} ({}); pass role or nth",
+                matches.iter().map(|m| m.0).collect::<Vec<_>>().join(", ")
+            )),
+        }
     }
 
     async fn field(&self, node: i64, ex: &BackgroundExecutor) -> Result<(), String> {
@@ -204,7 +283,7 @@ impl Control {
                     .is_some_and(|s| s.eq_ignore_ascii_case("password"))
         }) {
             return Err(
-                "Password fields require the sign-in vault; browser.type refuses them".into(),
+                "Password fields are refused; use browser.signin with a 1Password item".into(),
             );
         }
         Ok(())
@@ -321,7 +400,7 @@ impl Control {
 
     async fn press(&self, key: &str, ex: &BackgroundExecutor) -> Result<(), String> {
         if self.evaluate("(() => { let e=document.activeElement; while(e?.shadowRoot?.activeElement) e=e.shadowRoot.activeElement; return !!e?.matches('input[type=password],iframe,frame,object,embed'); })()", ex).await? == true {
-            return Err("Password fields require the sign-in vault".into());
+            return Err("Password fields are refused; use browser.signin".into());
         }
         let tree = self
             .call("Accessibility.getFullAXTree", json!({}), ex)
@@ -340,6 +419,10 @@ impl Control {
                 }
             }
         }
+        self.send_key(key, ex).await
+    }
+
+    async fn send_key(&self, key: &str, ex: &BackgroundExecutor) -> Result<(), String> {
         let mut modifiers = 0;
         let parts: Vec<_> = key.split('+').collect();
         for part in &parts[..parts.len() - 1] {
@@ -377,6 +460,71 @@ impl Control {
         };
         self.call("Input.dispatchKeyEvent", json!({"type":"keyDown","key":key,"code":code,"windowsVirtualKeyCode":vk,"modifiers":modifiers,"text":text,"commands":commands}), ex).await?;
         self.call("Input.dispatchKeyEvent", json!({"type":"keyUp","key":key,"code":code,"windowsVirtualKeyCode":vk,"modifiers":modifiers}), ex).await?;
+        Ok(())
+    }
+
+    async fn page_host(&self, ex: &BackgroundExecutor) -> Result<String, String> {
+        let page = self.version(ex).await?;
+        let url = url::Url::parse(page["page"]["url"].as_str().unwrap_or(""))
+            .map_err(|_| "Sign-in needs a web page")?;
+        if !matches!(url.scheme(), "https" | "http") {
+            return Err("Sign-in needs an http(s) page".into());
+        }
+        url.host_str()
+            .map(str::to_ascii_lowercase)
+            .ok_or("Sign-in needs a page with a host".into())
+    }
+
+    async fn login_field(&self, password: bool, ex: &BackgroundExecutor) -> Result<Option<i64>, String> {
+        let selectors = if password {
+            json!(["input[type=password]"])
+        } else {
+            json!([
+                "input[autocomplete~=username]", "input[type=email]", "input[name=identifier]",
+                "input[name*=user i]", "input[id*=user i]", "input[name*=login i]", "input[name*=email i]"
+            ])
+        };
+        self.call("DOM.enable", json!({}), ex).await?;
+        let context = self.context(ex).await?;
+        let found = self.call("Runtime.evaluate", json!({"contextId":context,"returnByValue":false,"expression":format!(
+            "(() => {{ for (const s of {selectors}) for (const e of document.querySelectorAll(s)) if (e.getClientRects().length && !e.disabled && !e.readOnly) return e; return null; }})()"
+        )}), ex).await?;
+        let Some(object) = found["result"]["objectId"].as_str() else {
+            return Ok(None);
+        };
+        let node = self
+            .call("DOM.describeNode", json!({"objectId":object}), ex)
+            .await;
+        self.call("Runtime.releaseObject", json!({"objectId":object}), ex)
+            .await?;
+        Ok(node?["node"]["backendNodeId"].as_i64())
+    }
+
+    /// Checks the site again right before each value, so a redirect never receives it.
+    async fn fill(&self, node: i64, sites: &[String], value: &str, ex: &BackgroundExecutor) -> Result<(), String> {
+        let host = self.page_host(ex).await?;
+        if !sites.iter().any(|site| host == *site || host.ends_with(&format!(".{site}"))) {
+            return Err(format!("The 1Password item does not list {host}; refusing to fill"));
+        }
+        if value.is_empty() {
+            return Err("The 1Password item has an empty value for this field".into());
+        }
+        self.click(node, ex).await?;
+        let target = self
+            .call(
+                "DOM.resolveNode",
+                json!({"backendNodeId":node,"executionContextId":self.context(ex).await?}),
+                ex,
+            )
+            .await?;
+        let object = target["object"]["objectId"]
+            .as_str()
+            .ok_or("Login field disappeared")?;
+        self.call("Runtime.callFunctionOn", json!({"objectId":object,"functionDeclaration":"function() { this.focus(); this.select?.(); }"}), ex)
+            .await?;
+        self.call("Runtime.releaseObject", json!({"objectId":object}), ex)
+            .await?;
+        self.call("Input.insertText", json!({"text":value}), ex).await?;
         Ok(())
     }
 
@@ -431,8 +579,8 @@ impl Control {
                     );
                 }
                 let after = self.version(ex).await?;
-                if before != after {
-                    return Err("Page changed while reading; snapshot again".into());
+                if before["page"]["url"] != after["page"]["url"] {
+                    return Err("Page navigated while reading; snapshot again".into());
                 }
                 let by_id: HashMap<_, _> = nodes
                     .iter()
@@ -539,6 +687,42 @@ impl Control {
                 }
                 Ok(json!({"ok":true}))
             }
+            "browser.signin" => {
+                let item = args["item"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty() && !s.starts_with('-'))
+                    .ok_or("item is required")?
+                    .to_string();
+                self.page_host(ex).await?;
+                let login = ex.spawn(async move { one_password(&item) }).await?;
+                let mut filled = Vec::new();
+                if let Some(field) = self.login_field(false, ex).await? {
+                    self.fill(field, &login.urls, &login.username, ex).await?;
+                    filled.push("username");
+                }
+                let mut password = self.login_field(true, ex).await?;
+                if password.is_none() && !filled.is_empty() {
+                    self.send_key("Enter", ex).await?;
+                    let deadline = Instant::now() + Duration::from_secs(15);
+                    while password.is_none() && Instant::now() < deadline {
+                        ex.timer(Duration::from_millis(250)).await;
+                        password = self.login_field(true, ex).await.unwrap_or(None);
+                    }
+                }
+                match password {
+                    Some(field) => {
+                        self.fill(field, &login.urls, &login.password, ex).await?;
+                        filled.push("password");
+                        self.send_key("Enter", ex).await?;
+                    }
+                    None if filled.is_empty() => {
+                        return Err("No visible login fields on this page".into());
+                    }
+                    None => {}
+                }
+                Ok(json!({"ok":true,"filled":filled,"url":self.version(ex).await?["page"]["url"]}))
+            }
             "browser.press" => {
                 self.press(args["key"].as_str().ok_or("key is required")?, ex)
                     .await?;
@@ -588,8 +772,8 @@ impl Control {
                     None => 5000,
                     Some(v) => v
                         .as_u64()
-                        .filter(|v| *v <= 30000)
-                        .ok_or("timeout must be 0..30000 milliseconds")?,
+                        .filter(|v| *v <= 120000)
+                        .ok_or("timeout must be 0..120000 milliseconds")?,
                 };
                 let deadline = Instant::now() + Duration::from_millis(timeout);
                 loop {
@@ -648,4 +832,53 @@ impl Control {
             _ => Err(format!("Unknown browser command: {command}")),
         }
     }
+}
+
+struct Login {
+    username: String,
+    password: String,
+    urls: Vec<String>,
+}
+
+/// `op` asks the person to approve (Touch ID) on first use; its output never reaches a reply or log.
+fn one_password(item: &str) -> Result<Login, String> {
+    let output = ["op", "/opt/homebrew/bin/op", "/usr/local/bin/op"]
+        .into_iter()
+        .find_map(|op| {
+            std::process::Command::new(op)
+                .args(["item", "get", item, "--format", "json", "--reveal"])
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+        })
+        .ok_or("1Password CLI `op` is not installed")?;
+    if !output.status.success() {
+        return Err(format!(
+            "op could not read {item:?}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let v: Value = serde_json::from_slice(&output.stdout).map_err(|_| "op returned unreadable output")?;
+    let field = |purpose: &str| {
+        v["fields"]
+            .as_array()
+            .and_then(|f| f.iter().find(|f| f["purpose"] == purpose))
+            .and_then(|f| f["value"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let urls: Vec<String> = v["urls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|u| u["href"].as_str())
+        .filter_map(|href| {
+            let href = if href.contains("://") { href.to_string() } else { format!("https://{href}") };
+            url::Url::parse(&href).ok()?.host_str().map(str::to_ascii_lowercase)
+        })
+        .collect();
+    if urls.is_empty() {
+        return Err(format!("1Password item {item:?} lists no website; add one so sign-in knows where it may fill"));
+    }
+    Ok(Login { username: field("USERNAME"), password: field("PASSWORD"), urls })
 }

@@ -2788,7 +2788,7 @@ impl AppWindow {
                 };
                 self.answer(result);
             }
-            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.snapshot" | "browser.read" | "browser.click" | "browser.type" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" => {
+            "browser.navigate" | "browser.back" | "browser.forward" | "browser.reload" | "browser.focus_url" | "browser.inspect" | "browser.devtools" | "browser.snapshot" | "browser.read" | "browser.click" | "browser.type" | "browser.signin" | "browser.press" | "browser.scroll" | "browser.wait" | "browser.screenshot" => {
                 let pane = Self::owned(a, "pane").or_else(|| person.then(|| self.model.focused_pane()).flatten());
                 let view = pane.as_ref().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.clone());
                 let Some(view) = view else { return self.fail("Focus a native browser pane or pass its pane id"); };

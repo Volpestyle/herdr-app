@@ -142,7 +142,13 @@ def main():
         click = ref(snap, 'button', 'Click me')
         command('browser.click', ref=click)
         assert 'Clicked safely' in command('browser.read')['text']
-        command('browser.click', ref=click, expect_error='snapshot again')
+        # Refs survive unrelated DOM changes; navigation or node removal expires them.
+        command('browser.click', ref=click)
+        command('browser.click', name='Click me')
+        command('browser.click', name='No such control', expect_error='No interactive element')
+        command('browser.type', name='Name', text='Typed by name', submit=True)
+        command('browser.wait', text='Submitted: Typed by name')
+        command('browser.type', name='Secret', text='must never be inserted', expect_error='Password fields')
         snap = command('browser.snapshot')
         field = ref(snap, 'textbox', 'Name ')
         command('browser.type', ref=field, text='discard this value')
@@ -155,7 +161,7 @@ def main():
         command('browser.type', ref=password, text='must never be inserted', expect_error='Password fields')
         command('browser.click', ref=password)
         command('browser.press', key='x', expect_error='Password fields')
-        # Refs from an older snapshot and from another pane cannot be reused.
+        # A newer snapshot replaces the previous one's refs.
         old = ref(snap, 'button', 'Click me')
         scoped = command('browser.snapshot', scope='main')
         assert 'Bottom of fixture' not in scoped['tree'] and 'Agent control fixture' in scoped['tree']

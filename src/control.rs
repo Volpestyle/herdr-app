@@ -43,7 +43,7 @@ fn serve(stream: UnixStream, tx: async_channel::Sender<Request>) {
     }
     let reply = match serde_json::from_str::<Value>(&line) {
         Ok(cmd) => {
-            let timeout = Duration::from_secs(if cmd.get("shot").is_some() || cmd["do"].as_str().is_some_and(crate::browser::is_page_command) { 40 } else { 5 });
+            let timeout = Duration::from_secs(if cmd.get("shot").is_some() || cmd["do"].as_str().is_some_and(crate::browser::is_page_command) { 150 } else { 5 });
             let (reply_tx, reply_rx) = std::sync::mpsc::channel();
             let _ = tx.send_blocking(Request::Control { cmd, reply: reply_tx });
             reply_rx.recv_timeout(timeout).unwrap_or_else(|_| json!({ "error": "the window did not answer" }))
@@ -112,7 +112,7 @@ pub fn client(args: &[String]) -> i32 {
         }
         Err(e) => return fail(&format!("no Herdr window at {}: {e}", socket().display())),
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(45)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(155)));
     let mut line = String::new();
     if stream.write_all(format!("{cmd}\n").as_bytes()).is_err() || BufReader::new(&stream).read_line(&mut line).is_err() {
         return fail("the window hung up");
