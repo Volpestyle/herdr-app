@@ -2770,21 +2770,22 @@ impl AppWindow {
         let active_ctx = self.model.active_tab().map(|c| c.id.clone());
         match name {
             // Native browser panes reuse the existing mod-pane document format.
-            "browser.open" => {
+            "browser.open" | "browser.split" => {
+                let place = if name == "browser.split" { Some(Self::arg(a, "direction").unwrap_or("right")) } else { Self::arg(a, "place") };
                 let url = match crate::browser::address(Self::arg(a, "url").unwrap_or("https://www.google.com")) {
                     Ok(url) => url, Err(error) => return self.fail(error),
                 };
                 let profile = Self::arg(a, "profile").unwrap_or("person");
                 if !matches!(profile, "person" | "agent") { return self.fail("profile must be person or agent"); }
                 let props = json!({"url":url,"profile":profile});
-                if !person && matches!(Self::arg(a, "place"), Some("right" | "down")) && Self::arg(a, "pane").is_none() {
+                if !person && matches!(place, Some("right" | "down")) && Self::arg(a, "pane").is_none() {
                     return self.fail("Pass the pane to split explicitly; focused panes are never implicit agent targets");
                 }
-                let result = match Self::arg(a, "place") {
+                let result = match place {
                     Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
                     Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
                     Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), Self::arg(a, "name").unwrap_or("Browser"), crate::browser::MOD.into(), props),
-                    _ => Err("place must be tab, right, or down".into()),
+                    _ => Err("place must be tab, right, or down (browser.split: right or down)".into()),
                 };
                 self.answer(result);
             }
@@ -3635,7 +3636,7 @@ impl AppWindow {
                 if name.starts_with("browser.") {
                     let caller = cmd["caller_terminal"].as_str().map(str::to_owned);
                     if !cmd["args"].is_object() { cmd["args"] = json!({}); }
-                    if name != "browser.open" && cmd["args"].get("pane").is_none() {
+                    if !matches!(name.as_str(), "browser.open" | "browser.split") && cmd["args"].get("pane").is_none() {
                         let pane = caller.as_ref().and_then(|c| self.browser_openers.get(c));
                         let Some(pane) = pane else {
                             let _ = reply.send(json!({"error":"Pass pane explicitly or open a browser from this terminal first; focused panes are never implicit targets"}));
@@ -3656,7 +3657,7 @@ impl AppWindow {
                         return;
                     }
                     let value = self.control(cmd, window, cx);
-                    if name == "browser.open" {
+                    if matches!(name.as_str(), "browser.open" | "browser.split") {
                         if let (Some(caller), Some(pane)) = (caller, value["pane"].as_str()) { self.browser_openers.insert(caller, pane.into()); }
                     }
                     let _ = reply.send(value);

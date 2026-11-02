@@ -148,7 +148,8 @@ URLs land there too. Cmd/Ctrl-click on a link in a terminal opens a browser
 tab, and adding Shift opens it beside that pane.
 
 `browser.open {url?, space?, name?, place?: "tab" | "right" | "down", pane?, profile?: "person" | "agent"}`
-opens a native Chromium/CEF browser, using the existing `native-browser` mod-pane identity.
+opens a native Chromium/CEF browser (`browser.split {direction?: "right" | "down", url?, pane?, profile?}`
+splits one beside the focused pane, or `pane`; Cmd+Ctrl+B and the + menu's "Browser beside" use it), using the existing `native-browser` mod-pane identity.
 The + menu's Browser item uses it. It runs on this Mac even in a remote space.
 `browser.navigate {url, pane?}`, `browser.back {pane?}`, `browser.forward {pane?}`,
 `browser.reload {pane?}`, `browser.focus_url {pane?}`, `browser.devtools {pane?}`

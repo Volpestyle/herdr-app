@@ -29,6 +29,7 @@ const fn cmd(name: &'static str, args: &'static [Arg], about: &'static str) -> C
 
 pub const COMMANDS: &[Command] = &[
     cmd("browser.open", &[opt("url"), opt("space"), opt("name"), opt("place"), opt("pane"), opt("profile")], "Open a native browser tab, or split right/down. Browsing runs on this Mac."),
+    cmd("browser.split", &[opt("direction"), opt("url"), opt("pane"), opt("profile")], "Open a native browser beside the focused pane (or pane): direction right (default) or down."),
     cmd("browser.navigate", &[req("url"), opt("pane"), opt("confirmed")], "Navigate a named browser or the terminal caller's last opened browser."),
     cmd("browser.back", &[opt("pane"), opt("confirmed")], "Go back in a native browser."),
     cmd("browser.forward", &[opt("pane"), opt("confirmed")], "Go forward in a native browser."),

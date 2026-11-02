@@ -61,6 +61,7 @@ export default class NewMenu extends View {
       })
       .child(this.row("terminal", svg("icons/shell.svg").size(14), "Terminal", () => run("tab.new", { space: space?.id }), shortcut("tab.new")))
       .child(this.row("browser", svg("mods/native-browser/browser.svg").size(14), "Browser", () => run("browser.open", { space: space?.id }), shortcut("browser.open")))
+      .child(this.row("browser-split", svg("mods/native-browser/browser.svg").size(14), "Browser beside", () => run("browser.split", { direction: "right" }), shortcut("browser.split:right")))
       .child(div().px(9).pt(8).pb(4).text_size(11).text_color(t.dim).child("Start an agent"))
       .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
         .children(choices.map((a, i) => this.row(a.key, a.tint ? svg(a.icon).size(14).text_color(t.foreground) : image(a.icon).size(14), a.name,
