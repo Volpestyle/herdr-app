@@ -1,8 +1,8 @@
 {
-  "sourceCommit": "77403ac",
+  "sourceCommit": "99af4f4",
   "platform": "macOS / Apple Silicon",
   "ok": true,
-  "cliCalls": 47,
+  "cliCalls": 46,
   "commandsExercised": [
     "browser.click",
     "browser.inspect",
@@ -42,27 +42,37 @@
     "keyEventObserved": true,
     "wheelScrollObserved": true,
     "scopedTreeExcludedOutsideText": true,
-    "foregroundAuditReplies": 47
+    "foregroundAuditReplies": 46,
+    "nativeViewShownAtInspection": false,
+    "paneBoundsAtInspection": null,
+    "workedBeforeFirstPanePaint": true
   },
   "png": {
     "dimensions": [
-      1986,
-      1316
+      2560,
+      1552
     ],
-    "sha256": "a9f2aa719dac0ebf3df11b79466d2f3725549f2a63ae7c3f63b47efc1ef89483",
-    "localPath": ".local/agent-control-smoke/1793589682363094000/page.png",
+    "sha256": "d501b7e3c5a7e724a38b13114079f2e33b67a8e0ff0a9401a427089689f6be9f",
+    "localPath": ".local/agent-control-smoke/1793590575619935000/page.png",
     "published": false
   },
-  "binarySha256": "6516d2d6ee5569d4cd89982ccb4280f169c27be0c6ccd7bc7851d19eaa98222a",
+  "binarySha256": "c2aa06373b2c1c51eae57dcd061f9f081bf167ec7ac2ec329c356e1a5bb82134",
   "checksPassed": {
     "cargoBuildBins": true,
     "commandAndGuideTests": 3,
     "existingPythonTests": 20
   },
-  "rawEvidenceLocal": ".local/agent-control-smoke/1793589682363094000",
+  "rawEvidenceLocal": ".local/agent-control-smoke/1793590575619935000",
   "limits": [
     "Loopback fixture proof; real sign-in, external sites and extension workflows were not exercised.",
     "Markdown output is escaped plain visible text.",
     "Raw PNG and full transcript remain local because worker evidence/report admission was refused."
-  ]
+  ],
+  "cleanup": {
+    "terminalReturnCode": 0,
+    "terminalState": "finished",
+    "terminalReason": "killed",
+    "coreReturnCode": 0,
+    "coreStopped": true
+  }
 }
