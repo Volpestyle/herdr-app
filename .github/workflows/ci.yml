@@ -140,7 +140,9 @@ jobs:
   # Keep the required check name stable while requiring every platform.
   test:
     needs: platform-tests
-    if: always()
+    # Same gate as platform-tests: on the fork this summary would always fail on a
+    # skipped run and hide real results, so it runs only when the builds do.
+    if: always() && (github.repository == 'herdrdev/herdr-app' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
