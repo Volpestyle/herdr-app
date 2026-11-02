@@ -23,12 +23,18 @@ PAGE = b'''<!doctype html><title>Agent control fixture</title>
 <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted: '+document.querySelector('#name').value">
 <label>Name <input id="name" autocomplete="off"></label>
 <label>Secret <input type="password" id="secret" autocomplete="off"></label><button>Submit</button></form>
-<p id="result">Waiting for input</p><p id="cookie"></p><script>document.querySelector('#cookie').textContent='Cookie: '+document.cookie</script><p><a href="/next">Next page</a></p></main>
+<p id="result">Waiting for input</p><p id="key"></p><p id="scroll"></p><p id="cookie"></p><script>document.querySelector('#cookie').textContent='Cookie: '+document.cookie;document.addEventListener('keydown',e=>{if(e.key==='Tab')document.querySelector('#key').textContent='Tab received'});window.addEventListener('scroll',()=>{if(scrollY>0)document.querySelector('#scroll').textContent='Scroll received'})</script><p><a href="/next">Next page</a></p></main>
 <div style="height:1500px"></div><p>Bottom of fixture</p>'''
 
 
+def asn(value):
+    # `find` includes the display name, while `front` prints only the ASN.
+    match = re.search(r'ASN:0x[0-9a-f]+-0x[0-9a-f]+', value, re.IGNORECASE)
+    return match[0] if match else value.strip()
+
+
 def front():
-    return subprocess.run(['/usr/bin/lsappinfo', 'front'], text=True, capture_output=True).stdout.strip()
+    return asn(subprocess.run(['/usr/bin/lsappinfo', 'front'], text=True, capture_output=True).stdout)
 
 
 def main():
@@ -67,6 +73,7 @@ def main():
     log = (work / 'app.log').open('w')
     app = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
     transcript = []
+    foreground_audit = []
 
     def command(command_name, expect_error=None, expect_timeout=False, caller='qa-terminal-a', caller_key='HC_TERMINAL_ID', **kwargs):
         cli_env = env.copy()
@@ -81,7 +88,13 @@ def main():
             assert result.returncode == 0 and 'error' not in value, value
             if expect_timeout: assert value.get('timeout') is True, value
             else: assert not value.get('timeout'), value
-        assert front() == before, 'Scratch app changed the frontmost application'
+        current_front = front()
+        own_asn = asn(subprocess.run(['/usr/bin/lsappinfo', 'find', f'pid={app.pid}'], text=True, capture_output=True).stdout)
+        foreground_audit.append({'command': command_name, 'before': before, 'current': current_front, 'preview': own_asn})
+        # The owner may switch apps while the finite test runs. Detect our own
+        # preview becoming frontmost without attributing their activity to us.
+        assert current_front == before or (own_asn and current_front != own_asn), foreground_audit[-1]
+        assert not own_asn or current_front != own_asn, foreground_audit[-1]
         return value
 
     def ref(snapshot, role, name):
@@ -143,7 +156,8 @@ def main():
         command('browser.press', key='x', expect_error='Password fields')
         # Refs from an older snapshot and from another pane cannot be reused.
         old = ref(snap, 'button', 'Click me')
-        command('browser.snapshot', scope='main')
+        scoped = command('browser.snapshot', scope='main')
+        assert 'Bottom of fixture' not in scoped['tree'] and 'Agent control fixture' in scoped['tree']
         command('browser.click', ref=old, expect_error='snapshot again')
         shot = command('browser.screenshot')
         path = Path(shot['path'])
@@ -153,7 +167,9 @@ def main():
         snap = command('browser.snapshot')
         command('browser.click', ref=ref(snap, 'textbox', 'Name'))
         command('browser.press', key='Tab')
+        command('browser.wait', text='Tab received')
         command('browser.scroll', dy=700)
+        command('browser.wait', text='Scroll received')
         person = command('browser.open', profile='person', url=url, caller='qa-terminal-b')
         command('browser.read', pane=person['pane'], expect_error='person-profile')
         command('browser.navigate', pane=person['pane'], url=url, expect_error='person-profile')
@@ -170,10 +186,11 @@ def main():
         command('pane.close', pane=pane)
         time.sleep(.2)
         command('browser.read', expect_error='No native browser')
-        result = {'ok': True, 'tcp_listeners': listeners, 'binary': binary, 'work': str(work), 'home': str(home), 'session': env['HC_SESSION'], 'front_before': before, 'front_after': front(), 'inspection': state, 'screenshot': str(work / 'page.png'), 'commands': transcript}
+        result = {'ok': True, 'tcp_listeners': listeners, 'binary': binary, 'work': str(work), 'home': str(home), 'session': env['HC_SESSION'], 'front_before': before, 'front_after': front(), 'foreground_audit': foreground_audit.copy(), 'inspection': state, 'screenshot': str(work / 'page.png'), 'commands': transcript}
         (work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps({k: v for k, v in result.items() if k != 'commands'}, indent=2), flush=True)
     finally:
+        (work / 'foreground-audit.json').write_text(json.dumps(foreground_audit, indent=2))
         (work / 'transcript.json').write_text(json.dumps(transcript, indent=2))
         if app.poll() is None:
             try:

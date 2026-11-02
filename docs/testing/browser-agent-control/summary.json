@@ -1,0 +1,68 @@
+{
+  "sourceCommit": "77403ac",
+  "platform": "macOS / Apple Silicon",
+  "ok": true,
+  "cliCalls": 47,
+  "commandsExercised": [
+    "browser.click",
+    "browser.inspect",
+    "browser.navigate",
+    "browser.open",
+    "browser.press",
+    "browser.read",
+    "browser.screenshot",
+    "browser.scroll",
+    "browser.snapshot",
+    "browser.type",
+    "browser.wait"
+  ],
+  "checks": {
+    "snapshotWithRefs": [
+      "e1 RootWebArea \"Agent control fixture\"",
+      "e2 main \"\"",
+      "e3 heading \"Agent control fixture\"",
+      "e4 StaticText \"Agent control fixture\"",
+      "- InlineTextBox \"Agent control fixture\"",
+      "e5 button \"Click me\"",
+      "e6 StaticText \"Click me\"",
+      "- InlineTextBox \"Click me\""
+    ],
+    "snapshotGeneration": 1,
+    "clickChangedVisibleText": true,
+    "replacementAndSubmit": true,
+    "passwordTypeAndPressRefused": true,
+    "staleRefsRefused": 3,
+    "personReadAndNavigationRefused": true,
+    "personCookiesIsolated": true,
+    "unknownAndClosedCallersRefused": true,
+    "waitTimeoutReported": true,
+    "foregroundUnchangedAtEveryCliReply": true,
+    "windowKey": false,
+    "tcpListenersReportedByLsof": "",
+    "keyEventObserved": true,
+    "wheelScrollObserved": true,
+    "scopedTreeExcludedOutsideText": true,
+    "foregroundAuditReplies": 47
+  },
+  "png": {
+    "dimensions": [
+      1986,
+      1316
+    ],
+    "sha256": "a9f2aa719dac0ebf3df11b79466d2f3725549f2a63ae7c3f63b47efc1ef89483",
+    "localPath": ".local/agent-control-smoke/1793589682363094000/page.png",
+    "published": false
+  },
+  "binarySha256": "6516d2d6ee5569d4cd89982ccb4280f169c27be0c6ccd7bc7851d19eaa98222a",
+  "checksPassed": {
+    "cargoBuildBins": true,
+    "commandAndGuideTests": 3,
+    "existingPythonTests": 20
+  },
+  "rawEvidenceLocal": ".local/agent-control-smoke/1793589682363094000",
+  "limits": [
+    "Loopback fixture proof; real sign-in, external sites and extension workflows were not exercised.",
+    "Markdown output is escaped plain visible text.",
+    "Raw PNG and full transcript remain local because worker evidence/report admission was refused."
+  ]
+}
