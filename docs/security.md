@@ -23,7 +23,7 @@ Spaces, tabs and splits are stored in each machine's core document, not in the a
 Terminals and their output belong to [herdr-core](https://github.com/herdrdev/herdr-core).
 Removing the app home does not stop the core or erase its data.
 
-The app exposes a local control socket in its home so agents can inspect and drive the window.
+The app exposes a local control socket (mode 0600) in its home so agents can inspect and drive the window.
 Treat access to that home as access to the window and its commands.
 Remote connections use SSH through the core.
 
@@ -41,13 +41,15 @@ Screenshots capture the page, not the screen, and stay under the app home's
 
 `browser.cdp` gives Playwright raw CDP over a bridge, not Chromium's debugging
 port: Herdr reserves fds 3/4 at startup, launches Chromium with
-`--remote-debugging-pipe`, and serves a WebSocket on 127.0.0.1 only after the
+`--remote-debugging-pipe` (close-on-exec, so nothing the app spawns inherits
+the pipe), and serves a WebSocket on 127.0.0.1 only after the
 first `browser.cdp`. The path carries a 256-bit random per-launch token that the
 command returns over the control socket, so the endpoint has the socket's trust
 line. Upgrades with any `Origin` (web pages) or a non-loopback `Host` (DNS
 rebinding) are refused even with the token. Each client gets its own browser
 session; the bridge hides every target outside the agent profile (releasing
-and detaching paused ones), refuses browser-level methods by default, denies
+and detaching paused ones), refuses browser-level methods by default, accepts
+only the domains Playwright drives on page sessions, denies
 methods that create or dispose contexts, attach to the browser target, close or
 crash the browser, or touch default-context storage, and translates Playwright's
 cookie calls to page-scoped `Network` calls on an agent page. New pages are

@@ -21,6 +21,17 @@ use std::time::Duration;
 static PIPE: OnceLock<Mutex<Option<(File, File)>>> = OnceLock::new();
 static BRIDGE: OnceLock<Result<Arc<Bridge>, String>> = OnceLock::new();
 const MAX_CLIENTS: usize = 8;
+/// Connections being served at once, counted before the handshake.
+const MAX_CONNECTIONS: usize = 16;
+static CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Releases a connection slot when its thread ends.
+struct Slot;
+impl Drop for Slot {
+    fn drop(&mut self) {
+        CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 fn fd_open(fd: i32) -> bool {
     unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
@@ -50,7 +61,7 @@ pub fn reserve() {
         };
         let (to_read, to_write, from_read, from_write) =
             (lift(to[0]), lift(to[1]), lift(from[0]), lift(from[1]));
-        if libc::dup2(to_read, 3) != 3 || libc::dup2(from_write, 4) != 4 {
+        if !place(to_read, 3) || !place(from_write, 4) {
             return;
         }
         libc::close(to_read);
@@ -60,6 +71,12 @@ pub fn reserve() {
             File::from_raw_fd(from_read),
         ))));
     }
+}
+
+/// Put `fd` at `target` for Chromium in this process only. dup2 clears
+/// close-on-exec, so set it again: nothing the app spawns inherits the pipe.
+fn place(fd: i32, target: i32) -> bool {
+    unsafe { libc::dup2(fd, target) == target && libc::fcntl(target, libc::F_SETFD, libc::FD_CLOEXEC) == 0 }
 }
 
 pub fn reserved() -> bool {
@@ -115,11 +132,21 @@ impl Bridge {
             .spawn(move || {
                 let mut next = 0u64;
                 for stream in listener.incoming().flatten() {
+                    // Refuse before spending a thread on an unauthenticated peer.
+                    if CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= MAX_CONNECTIONS {
+                        CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        drop(stream);
+                        continue;
+                    }
                     next += 1;
                     let (client, id) = (acceptor.clone(), next);
-                    let _ = std::thread::Builder::new()
-                        .name("herdr-cdp-client".into())
-                        .spawn(move || client.serve(id, stream));
+                    let spawned = std::thread::Builder::new().name("herdr-cdp-client".into()).spawn(move || {
+                        let _slot = Slot;
+                        client.serve(id, stream)
+                    });
+                    if spawned.is_err() {
+                        CONNECTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    }
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -225,6 +252,7 @@ impl Bridge {
             }
         };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
         let Ok(mut socket) = tungstenite::accept_hdr(stream, check) else { return };
         let (tx, rx) = mpsc::channel();
         {
@@ -323,11 +351,12 @@ enum Pending {
     Internal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Filter {
     None,
     Targets,
-    Attach,
+    /// An attach to this agent target.
+    Attach(String),
 }
 
 #[derive(Default, Debug)]
@@ -354,6 +383,10 @@ pub struct Router {
     /// announced once and only that session's detach reaches Playwright
     /// (which keys pages by target id).
     announced: HashMap<(u64, String), String>,
+    /// Each client session's own target.
+    targets: HashMap<String, String>,
+    /// Nested sessions and the session they were attached under.
+    parent: HashMap<String, String>,
 }
 
 /// Root (browser-session) methods that pass through unchanged.
@@ -377,34 +410,29 @@ fn cookie_call(method: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-/// Never allowed from any session: they reach other profiles, other sessions or quit.
-const DENIED: &[&str] = &[
-    "Target.attachToBrowserTarget",
-    "Target.exposeDevToolsProtocol",
-    "Target.createBrowserContext",
-    "Target.disposeBrowserContext",
-    "Target.getBrowserContexts",
-    "Target.setRemoteLocations",
-    "Target.sendMessageToTarget",
-    "Target.attachToTarget",
-    "Target.createTarget",
-    "Target.getTargets",
-    "Target.setDiscoverTargets",
-    "Target.activateTarget",
-    "Target.closeTarget",
-    "Browser.close",
-    "Browser.crash",
-    "Browser.crashGpuProcess",
-    "Browser.executeBrowserCommand",
-    // Default-context storage (the person profile) whatever session sends it.
-    "Storage.getCookies",
-    "Storage.setCookies",
-    "Storage.clearCookies",
-    "Storage.clearDataForOrigin",
-    "Storage.clearDataForStorageKey",
-    "Network.clearBrowserCookies",
-    "Network.clearBrowserCache",
+/// Domains Playwright drives on page, frame and worker sessions. Everything
+/// else on those sessions is refused (deny by default).
+const PAGE_DOMAINS: &[&str] = &[
+    "Page", "Runtime", "DOM", "Input", "Network", "Fetch", "Emulation", "Accessibility", "Log", "CSS", "Overlay",
+    "Debugger", "Profiler", "IO",
 ];
+
+/// Whether a page-level session may send `method`. `own` is the session's target.
+fn page_method(method: &str, params: &Value, own: Option<&str>) -> bool {
+    let Some((domain, name)) = method.split_once('.') else { return false };
+    match domain {
+        // Cookie and cache clearing reach the default (person) profile.
+        "Network" => !name.starts_with("clear"),
+        // Download behavior is the browser's, not this page's.
+        "Page" => name != "setDownloadBehavior",
+        "Target" => match name {
+            "setAutoAttach" | "detachFromTarget" => true,
+            "getTargetInfo" => params.get("targetId").is_none_or(|t| t.as_str().is_some_and(|t| Some(t) == own)),
+            _ => false,
+        },
+        _ => PAGE_DOMAINS.contains(&domain),
+    }
+}
 
 fn error(id: &Value, message: &str) -> Value {
     json!({"id": id, "error": {"code": -32000, "message": message}})
@@ -440,6 +468,9 @@ impl Router {
 
     pub fn disconnect(&mut self, client: u64) -> Vec<Out> {
         let Some(state) = self.clients.remove(&client) else { return vec![] };
+        let owner = &self.owner;
+        self.targets.retain(|s, _| owner.get(s) != Some(&client));
+        self.parent.retain(|s, _| owner.get(s) != Some(&client));
         self.owner.retain(|_, c| *c != client);
         self.pages.retain(|_, c| *c != client);
         self.announced.retain(|(c, _), _| *c != client);
@@ -461,7 +492,7 @@ impl Router {
         };
         let id = message.get("id").cloned().unwrap_or(Value::Null);
         let method = message["method"].as_str().unwrap_or_default().to_string();
-        let mut params = message.get("params").cloned().unwrap_or_else(|| json!({}));
+        let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
         let deny = |why: &str| vec![Out::Client(client, error(&id, why))];
         if !id.is_u64() || method.is_empty() {
             return deny("Malformed CDP request");
@@ -478,7 +509,7 @@ impl Router {
                 if !state.sessions.contains(&session) {
                     return deny("Unknown CDP session");
                 }
-                if DENIED.contains(&method.as_str()) {
+                if !page_method(&method, &params, self.targets.get(&session).map(String::as_str)) {
                     return deny(&format!("Herdr blocks {method} on page sessions"));
                 }
                 if method == "Target.detachFromTarget" && !self.owns_detach(client, &params) {
@@ -508,7 +539,7 @@ impl Router {
                         if params["flatten"] != true {
                             return deny("Herdr requires flattened CDP sessions");
                         }
-                        filter = Filter::Attach;
+                        filter = Filter::Attach(target.to_string());
                     }
                 } else if method == "Target.detachFromTarget" {
                     if !self.owns_detach(client, &params) {
@@ -571,9 +602,9 @@ impl Router {
                             }
                             message["result"]["targetInfos"] = Value::Array(kept);
                         }
-                        Filter::Attach => {
+                        Filter::Attach(target) => {
                             if let Some(session) = message["result"]["sessionId"].as_str() {
-                                self.adopt(client, session);
+                                self.adopt(client, session, &target);
                             }
                         }
                         Filter::None => {}
@@ -598,8 +629,9 @@ impl Router {
                         let detach = self.id(Pending::Internal);
                         return vec![Out::Browser(json!({"id": detach, "method": "Target.detachFromTarget", "params": {"sessionId": session}, "sessionId": root})), reply];
                     }
+                    let own = key.1.clone();
                     self.announced.insert(key, session.clone());
-                    self.adopt(client, &session);
+                    self.adopt(client, &session, &own);
                     self.pages.insert(session.clone(), client);
                     vec![
                         Out::Client(client, json!({"method": "Target.attachedToTarget", "params": {"sessionId": session, "targetInfo": info, "waitingForDebugger": false}})),
@@ -619,13 +651,19 @@ impl Router {
             // A page or child session this client owns.
             match method.as_str() {
                 "Target.attachedToTarget" => {
-                    if let Some(child) = message["params"]["sessionId"].as_str() {
-                        self.adopt(client, child);
+                    let child = message["params"]["sessionId"].as_str().unwrap_or_default().to_string();
+                    let info = &message["params"]["targetInfo"];
+                    // Nested workers and frames pass the same profile check as roots.
+                    if !self.agent_target(info) || child.is_empty() {
+                        return self.release(&child, &session, message["params"]["waitingForDebugger"] == true);
                     }
+                    let target = info["targetId"].as_str().unwrap_or_default().to_string();
+                    self.adopt(client, &child, &target);
+                    self.parent.insert(child, session.clone());
                 }
                 "Target.detachedFromTarget" => {
                     if let Some(child) = message["params"]["sessionId"].as_str() {
-                        self.owner.remove(child);
+                        self.forget(child);
                     }
                 }
                 _ => {}
@@ -652,18 +690,11 @@ impl Router {
                     if params["targetInfo"]["type"] == "page" {
                         self.pages.insert(child.clone(), client);
                     }
-                    self.adopt(client, &child);
+                    self.adopt(client, &child, &target);
                     true
                 } else {
-                    // Hidden: release a paused target and let go of it.
-                    let mut outs = vec![];
-                    if params["waitingForDebugger"] == true {
-                        let id = self.id(Pending::Internal);
-                        outs.push(Out::Browser(json!({"id": id, "method": "Runtime.runIfWaitingForDebugger", "sessionId": child})));
-                    }
-                    let id = self.id(Pending::Internal);
-                    outs.push(Out::Browser(json!({"id": id, "method": "Target.detachFromTarget", "params": {"sessionId": child}, "sessionId": session})));
-                    return outs;
+                    let waiting = params["waitingForDebugger"] == true;
+                    return self.release(&child, &session, waiting);
                 }
             }
             "Target.targetCreated" | "Target.targetInfoChanged" => {
@@ -685,8 +716,8 @@ impl Router {
             "Target.detachedFromTarget" => {
                 let child = params["sessionId"].as_str().unwrap_or_default().to_string();
                 let key = (client, params["targetId"].as_str().unwrap_or_default().to_string());
-                self.pages.remove(&child);
-                let owned = self.owner.remove(&child).is_some();
+                let owned = self.owner.get(&child) == Some(&client);
+                self.forget(&child);
                 match self.announced.get(&key) {
                     // A superseded session of an announced page: Playwright would close the page.
                     Some(current) if *current != child => false,
@@ -728,8 +759,40 @@ impl Router {
         vec![Out::Browser(json!({"id": global, "method": "Target.attachToTarget", "params": {"targetId": target, "flatten": true}, "sessionId": root}))]
     }
 
-    fn adopt(&mut self, client: u64, session: &str) {
+    /// Hide an attached target: let a paused one run, then detach from it.
+    fn release(&mut self, child: &str, parent: &str, waiting: bool) -> Vec<Out> {
+        let mut outs = vec![];
+        if child.is_empty() {
+            return outs;
+        }
+        if waiting {
+            let id = self.id(Pending::Internal);
+            outs.push(Out::Browser(json!({"id": id, "method": "Runtime.runIfWaitingForDebugger", "sessionId": child})));
+        }
+        let id = self.id(Pending::Internal);
+        outs.push(Out::Browser(json!({"id": id, "method": "Target.detachFromTarget", "params": {"sessionId": child}, "sessionId": parent})));
+        outs
+    }
+
+    /// A detached session and everything attached under it stop being admitted.
+    fn forget(&mut self, session: &str) {
+        let children: Vec<String> = self.parent.iter().filter(|(_, p)| *p == session).map(|(c, _)| c.clone()).collect();
+        for child in children {
+            self.forget(&child);
+        }
+        self.parent.remove(session);
+        self.targets.remove(session);
+        self.pages.remove(session);
+        if let Some(client) = self.owner.remove(session) {
+            if let Some(state) = self.clients.get_mut(&client) {
+                state.sessions.remove(session);
+            }
+        }
+    }
+
+    fn adopt(&mut self, client: u64, session: &str, target: &str) {
         self.owner.insert(session.to_string(), client);
+        self.targets.insert(session.to_string(), target.to_string());
         if let Some(state) = self.clients.get_mut(&client) {
             state.sessions.insert(session.to_string());
         }
@@ -880,7 +943,7 @@ mod tests {
             "sessionId": "A1", "targetInfo": {"targetId": "TA", "type": "page", "browserContextId": "AGENT"}}}));
         let cookies = r.from_client(1, json!({"id": 2, "method": "Storage.getCookies", "params": {"browserContextId": "AGENT"}}));
         // Any of this client's agent pages; all share the agent profile.
-        assert!(["N1", "M1", "A1"].contains(&sent(&cookies)["sessionId"].as_str().unwrap()), "{cookies:?}");
+        assert!(r.pages.contains_key(sent(&cookies)["sessionId"].as_str().unwrap()), "{cookies:?}");
         assert_eq!(sent(&cookies)["method"], "Network.getAllCookies");
         assert_eq!(sent(&cookies)["params"], json!({}));
         let set = r.from_client(1, json!({"id": 7, "method": "Storage.setCookies", "params": {"cookies": [{"name": "a", "value": "b"}], "browserContextId": "AGENT"}}));
@@ -939,6 +1002,162 @@ mod tests {
         let flushed = r.from_browser(json!({"id": id, "result": {"sessionId": "ROOT"}}));
         assert_eq!(sent(&flushed)["method"], "Browser.getVersion");
         assert_eq!(sent(&flushed)["sessionId"], "ROOT");
+    }
+
+    fn attached_page() -> Router {
+        let mut r = rooted();
+        r.from_browser(json!({"method": "Target.attachedToTarget", "sessionId": "ROOT", "params": {
+            "sessionId": "A1", "targetInfo": {"targetId": "TA", "type": "page", "browserContextId": "AGENT"}}}));
+        // An iframe under that page, auto-attached on the page's own session.
+        r.from_browser(json!({"method": "Target.attachedToTarget", "sessionId": "A1", "params": {
+            "sessionId": "F1", "targetInfo": {"targetId": "TF", "type": "iframe", "browserContextId": "AGENT"}}}));
+        r
+    }
+
+    #[test]
+    fn page_sessions_carry_playwrights_page_flow() {
+        // What Playwright 1.63 sent on page sessions in the real-app proof, plus
+        // the rest of the domains its page, frame and worker code uses.
+        let flow = [
+            ("Page.enable", json!({})), ("Page.getFrameTree", json!({})), ("Log.enable", json!({})),
+            ("Page.setLifecycleEventsEnabled", json!({"enabled": true})), ("Runtime.enable", json!({})),
+            ("Page.addScriptToEvaluateOnNewDocument", json!({"source": ""})), ("Network.enable", json!({})),
+            ("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true})),
+            ("Emulation.setFocusEmulationEnabled", json!({"enabled": true})), ("Emulation.setEmulatedMedia", json!({})),
+            ("Runtime.runIfWaitingForDebugger", json!({})), ("Page.navigate", json!({"url": "http://127.0.0.1/"})),
+            ("Runtime.callFunctionOn", json!({})), ("DOM.describeNode", json!({})), ("DOM.getContentQuads", json!({})),
+            ("Input.dispatchMouseEvent", json!({})), ("Input.insertText", json!({"text": "x"})),
+            ("Input.dispatchKeyEvent", json!({})), ("Page.captureScreenshot", json!({})),
+            ("Page.getLayoutMetrics", json!({})), ("Network.getAllCookies", json!({})),
+            ("Network.setCookies", json!({"cookies": []})), ("Network.setExtraHTTPHeaders", json!({})),
+            ("Fetch.enable", json!({})), ("Fetch.continueRequest", json!({})), ("Accessibility.getFullAXTree", json!({})),
+            ("CSS.enable", json!({})), ("Overlay.highlightNode", json!({})), ("Debugger.enable", json!({})),
+            ("Profiler.startPreciseCoverage", json!({})), ("IO.read", json!({"handle": "h"})),
+            ("Target.getTargetInfo", json!({})), ("Target.getTargetInfo", json!({"targetId": "TA"})),
+        ];
+        let mut r = attached_page();
+        for (i, (method, params)) in flow.iter().enumerate() {
+            let out = r.from_client(1, json!({"id": i, "method": method, "params": params, "sessionId": "A1"}));
+            assert!(matches!(&out[..], [Out::Browser(m)] if m["method"] == *method && m["sessionId"] == "A1"), "{method}: {out:?}");
+        }
+        // Frame sessions run the same flow, scoped to their own target.
+        let frame = r.from_client(1, json!({"id": 90, "method": "Runtime.evaluate", "sessionId": "F1"}));
+        assert_eq!(sent(&frame)["sessionId"], "F1");
+        let own = r.from_client(1, json!({"id": 91, "method": "Target.getTargetInfo", "params": {"targetId": "TF"}, "sessionId": "F1"}));
+        assert_eq!(sent(&own)["sessionId"], "F1");
+        let child = r.from_client(1, json!({"id": 92, "method": "Target.detachFromTarget", "params": {"sessionId": "F1"}, "sessionId": "A1"}));
+        assert_eq!(sent(&child)["method"], "Target.detachFromTarget");
+    }
+
+    #[test]
+    fn page_sessions_refuse_everything_else() {
+        let refused = [
+            ("Browser.setDownloadBehavior", json!({"behavior": "allow"})), ("Browser.grantPermissions", json!({"permissions": []})),
+            ("Browser.setPermission", json!({})), ("Browser.resetPermissions", json!({})), ("Browser.close", json!({})),
+            ("Browser.getVersion", json!({})), ("Target.getTargetInfo", json!({"targetId": "TP"})),
+            ("Target.getTargetInfo", json!({"targetId": 7})), ("Target.autoAttachRelated", json!({"targetId": "TP"})),
+            ("Target.openDevTools", json!({"targetId": "TA"})), ("Target.attachToTarget", json!({"targetId": "TP"})),
+            ("Target.attachToBrowserTarget", json!({})), ("Target.createTarget", json!({"url": "x"})),
+            ("Target.getTargets", json!({})), ("Target.setDiscoverTargets", json!({"discover": true})),
+            ("Target.exposeDevToolsProtocol", json!({})), ("Extensions.loadUnpacked", json!({})),
+            ("Extensions.getStorageItems", json!({})), ("PWA.install", json!({})), ("Storage.getCookies", json!({})),
+            ("Storage.setCookies", json!({})), ("Storage.clearCookies", json!({})), ("Storage.clearDataForOrigin", json!({})),
+            ("Storage.getUsageAndQuota", json!({})), ("SystemInfo.getInfo", json!({})), ("SystemInfo.getProcessInfo", json!({})),
+            ("Tethering.bind", json!({"port": 1})), ("Tracing.start", json!({})), ("Autofill.trigger", json!({})),
+            ("Network.clearBrowserCookies", json!({})), ("Network.clearBrowserCache", json!({})),
+            ("Page.setDownloadBehavior", json!({"behavior": "allow"})), ("Security.setIgnoreCertificateErrors", json!({})),
+            ("ServiceWorker.enable", json!({})), ("Memory.getDOMCounters", json!({})), ("Bogus", json!({})), ("", json!({})),
+        ];
+        let mut r = attached_page();
+        for session in ["A1", "F1"] {
+            for (i, (method, params)) in refused.iter().enumerate() {
+                let out = r.from_client(1, json!({"id": i, "method": method, "params": params, "sessionId": session}));
+                assert!(denied(&out), "{session} {method}: {out:?}");
+            }
+        }
+        // A page cannot detach a session it does not own, nor name another profile.
+        assert!(denied(&r.from_client(1, json!({"id": 1, "method": "Target.detachFromTarget", "params": {"sessionId": "ROOT2"}, "sessionId": "A1"}))));
+        assert!(denied(&r.from_client(1, json!({"id": 2, "method": "Network.getAllCookies", "params": {"browserContextId": "PERSON"}, "sessionId": "A1"}))));
+    }
+
+    #[test]
+    fn nested_attachments_pass_the_profile_check() {
+        let mut r = attached_page();
+        // A child of an agent page that is not in the agent profile is released and hidden.
+        let foreign = r.from_browser(json!({"method": "Target.attachedToTarget", "sessionId": "A1", "params": {
+            "sessionId": "X1", "waitingForDebugger": true,
+            "targetInfo": {"targetId": "TX", "type": "worker", "browserContextId": "PERSON"}}}));
+        assert_eq!(foreign.len(), 2, "{foreign:?}");
+        assert!(foreign.iter().all(|o| matches!(o, Out::Browser(_))), "{foreign:?}");
+        assert_eq!(sent(&foreign)["method"], "Runtime.runIfWaitingForDebugger");
+        assert!(matches!(&foreign[1], Out::Browser(m) if m["method"] == "Target.detachFromTarget" && m["sessionId"] == "A1" && m["params"]["sessionId"] == "X1"));
+        assert!(denied(&r.from_client(1, json!({"id": 1, "method": "Runtime.evaluate", "sessionId": "X1"}))));
+        // A child with no profile at all is hidden too.
+        let unnamed = r.from_browser(json!({"method": "Target.attachedToTarget", "sessionId": "A1", "params": {
+            "sessionId": "X2", "targetInfo": {"targetId": "TY", "type": "iframe"}}}));
+        assert!(unnamed.iter().all(|o| matches!(o, Out::Browser(_))), "{unnamed:?}");
+        assert!(denied(&r.from_client(1, json!({"id": 2, "method": "Runtime.evaluate", "sessionId": "X2"}))));
+        // Events from a hidden child never reach the client.
+        assert!(r.from_browser(json!({"method": "Runtime.consoleAPICalled", "sessionId": "X1", "params": {}})).is_empty());
+        // An agent-profile child is admitted.
+        let agent = r.from_browser(json!({"method": "Target.attachedToTarget", "sessionId": "A1", "params": {
+            "sessionId": "W1", "targetInfo": {"targetId": "TW", "type": "worker", "browserContextId": "AGENT"}}}));
+        assert!(matches!(&agent[..], [Out::Client(1, _)]), "{agent:?}");
+        assert_eq!(sent(&r.from_client(1, json!({"id": 3, "method": "Runtime.evaluate", "sessionId": "W1"})))["sessionId"], "W1");
+    }
+
+    #[test]
+    fn detached_sessions_and_their_children_stop_being_admitted() {
+        let mut r = attached_page();
+        // Child detach on its parent's session.
+        r.from_browser(json!({"method": "Target.detachedFromTarget", "sessionId": "A1", "params": {"sessionId": "F1", "targetId": "TF"}}));
+        assert!(denied(&r.from_client(1, json!({"id": 1, "method": "Runtime.evaluate", "sessionId": "F1"}))));
+        assert_eq!(sent(&r.from_client(1, json!({"id": 2, "method": "Runtime.evaluate", "sessionId": "A1"})))["sessionId"], "A1");
+        // A page detach takes its children with it.
+        r.from_browser(json!({"method": "Target.attachedToTarget", "sessionId": "A1", "params": {
+            "sessionId": "F2", "targetInfo": {"targetId": "TF2", "type": "iframe", "browserContextId": "AGENT"}}}));
+        r.from_browser(json!({"method": "Target.detachedFromTarget", "sessionId": "ROOT", "params": {"sessionId": "A1", "targetId": "TA"}}));
+        for session in ["A1", "F2"] {
+            assert!(denied(&r.from_client(1, json!({"id": 3, "method": "Runtime.evaluate", "sessionId": session}))), "{session}");
+        }
+        // Cookies no longer route to the gone page.
+        assert!(denied(&r.from_client(1, json!({"id": 4, "method": "Storage.getCookies"}))));
+    }
+
+    #[test]
+    fn the_pipe_ends_never_reach_spawned_children() {
+        use std::os::fd::AsRawFd;
+        let child_sees = |fd: i32| {
+            let out = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("[ -e /dev/fd/{fd} ] && echo open || echo closed"))
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let (mut to, mut from) = {
+            let mut fds = [0; 2];
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            unsafe { (File::from_raw_fd(fds[1]), File::from_raw_fd(fds[0])) }
+        };
+        // High stand-ins for 3 and 4, which the test harness may already use.
+        let (read_at, write_at) = (243, 244);
+        // Control: a plain dup2 leaks into children, so the probe can see a leak.
+        assert_eq!(unsafe { libc::dup2(from.as_raw_fd(), read_at) }, read_at);
+        assert_eq!(child_sees(read_at), "open");
+        assert!(place(from.as_raw_fd(), read_at) && place(to.as_raw_fd(), write_at));
+        assert_eq!(child_sees(read_at), "closed");
+        assert_eq!(child_sees(write_at), "closed");
+        // The placed ends still carry Chromium's traffic inside this process.
+        let mut placed = unsafe { File::from_raw_fd(write_at) };
+        placed.write_all(b"ping").unwrap();
+        let mut got = [0u8; 4];
+        from.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"ping");
+        to.write_all(b"pong").unwrap();
+        let mut reader = unsafe { File::from_raw_fd(read_at) };
+        reader.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"pong");
     }
 
     #[test]
