@@ -11,7 +11,7 @@ use objc2::{
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSEvent, NSEventMask, NSEventModifierFlags, NSView, NSWindow,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde_json::{Value, json};
 use std::{
@@ -158,6 +158,8 @@ pub struct Host {
     focus_gate: Arc<AtomicBool>,
     monitor: Option<Retained<AnyObject>>,
 }
+const AGENT_CURSOR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B69CFF"/><stop offset="1" stop-color="#7C5CFF"/></linearGradient></defs><path d="M4 3.2 L4 21 Q4 23.2 5.9 21.7 L9.9 18.6 L12.9 24.5 Q13.7 26 15.2 25.3 L16.6 24.6 Q18 23.9 17.3 22.5 L14.4 16.9 L19.4 16.6 Q21.6 16.4 20 14.9 L6 2.2 Q4 0.9 4 3.2 Z" fill="url(#g)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="11.5" cy="11.6" r="1.25" fill="#2A1B5E"/><circle cx="8.4" cy="11.1" r=".45" fill="#fff"/><circle cx="11.9" cy="11.1" r=".45" fill="#fff"/><ellipse cx="6.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><ellipse cx="12.8" cy="14" rx="1.1" ry=".6" fill="#FF8FB8" opacity=".75"/><path d="M8.9 13.5 Q9.75 14.5 10.6 13.5" fill="none" stroke="#2A1B5E" stroke-width=".8" stroke-linecap="round"/></svg>"##;
+
 fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>, x: f64, y: f64) -> bool {
     let Some(window) = container.window() else { return false };
     if container.isHidden() || !window.isVisible() {
@@ -169,16 +171,21 @@ fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>,
     unsafe {
         let layer = slot.get_or_insert_with(|| {
             container.setWantsLayer(true);
-            let cursor: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
-            let image: *mut AnyObject = msg_send![cursor, image];
-            let hot: NSPoint = msg_send![cursor, hotSpot];
-            let size: NSSize = msg_send![image, size];
+            let data: *mut AnyObject = msg_send![class!(NSData), dataWithBytes: AGENT_CURSOR.as_ptr().cast::<std::ffi::c_void>(), length: AGENT_CURSOR.len()];
+            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
+            let image: *mut AnyObject = msg_send![image, initWithData: data];
+            let size = NSSize::new(28., 28.);
+            let _: () = msg_send![image, setSize: size];
+            let hot = NSPoint::new(4.5, 3.);
             let layer: Retained<AnyObject> = msg_send![class!(CALayer), layer];
             let _: () = msg_send![&*layer, setBounds: NSRect::new(NSPoint::new(0., 0.), size)];
             let _: () = msg_send![&*layer, setAnchorPoint: NSPoint::new(hot.x / size.width, 1. - hot.y / size.height)];
             let _: () = msg_send![&*layer, setContents: image];
             let _: () = msg_send![&*layer, setContentsScale: window.backingScaleFactor()];
             let _: () = msg_send![&*layer, setZPosition: 1e6_f64];
+            let _: () = msg_send![&*layer, setShadowOpacity: 0.35_f32];
+            let _: () = msg_send![&*layer, setShadowRadius: 3_f64];
+            let _: () = msg_send![&*layer, setShadowOffset: NSSize::new(0., -1.)];
             let root: *mut AnyObject = msg_send![container, layer];
             let _: () = msg_send![root, addSublayer: &*layer];
             layer
@@ -188,6 +195,13 @@ fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>,
         let _: () = msg_send![class!(CATransaction), setAnimationDuration: 0.3_f64];
         let _: () = msg_send![&**layer, setPosition: position];
         let _: () = msg_send![class!(CATransaction), commit];
+        let squish: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform.scale")];
+        let from: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0.75_f64];
+        let now: f64 = msg_send![&**layer, convertTime: 0_f64, fromLayer: std::ptr::null::<AnyObject>()];
+        let _: () = msg_send![squish, setFromValue: from];
+        let _: () = msg_send![squish, setDuration: 0.25_f64];
+        let _: () = msg_send![squish, setBeginTime: now + if fresh { 0.05 } else { 0.32 }];
+        let _: () = msg_send![&**layer, addAnimation: squish, forKey: &*NSString::from_str("squish")];
     }
     true
 }
