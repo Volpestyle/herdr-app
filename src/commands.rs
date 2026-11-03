@@ -36,6 +36,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("browser.reload", &[opt("pane"), opt("confirmed")], "Reload a native browser page."),
     cmd("browser.focus_url", &[opt("pane"), opt("confirmed")], "Focus and select a native browser's address bar."),
     cmd("browser.inspect", &[opt("pane"), opt("confirmed")], "Inspect native browser loading state, URL, title and bounds."),
+    cmd("browser.cdp", &[opt("pane")], "Return a token-gated loopback CDP endpoint for Playwright connectOverCDP; agent-profile pages only, no debugging port."),
     cmd("browser.snapshot", &[opt("pane"), opt("scope"), opt("confirmed")], "Read the accessibility tree with generation-bound refs; scope is a CSS selector."),
     cmd("browser.read", &[opt("pane"), opt("format"), opt("confirmed")], "Read up to 20000 characters of visible text (text or plain Markdown)."),
     cmd("browser.click", &[opt("ref"), opt("name"), opt("role"), opt("nth"), opt("pane"), opt("confirmed")], "Click a snapshot ref, or the element with this exact accessible name (role/nth disambiguate), using page input only."),

@@ -105,6 +105,8 @@ fn main() {
     }
 
     #[cfg(target_os = "macos")]
+    browser::cdp::reserve();
+    #[cfg(target_os = "macos")]
     core_bin::fill_path();
     tracing_subscriber::fmt()
         .with_env_filter(

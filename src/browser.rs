@@ -8,6 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 #[cfg(target_os = "macos")]
+pub mod cdp;
+#[cfg(target_os = "macos")]
 mod control;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -18,6 +20,7 @@ pub fn is_page_command(name: &str) -> bool {
     matches!(
         name,
         "browser.snapshot"
+            | "browser.cdp"
             | "browser.read"
             | "browser.click"
             | "browser.type"
@@ -284,6 +287,13 @@ impl Browser {
     }
 
     pub fn check_access(&self, args: &Value) -> Result<(), String> {
+        self.check_command_access("", args)
+    }
+
+    fn check_command_access(&self, name: &str, args: &Value) -> Result<(), String> {
+        if name == "browser.cdp" && self.profile != "agent" {
+            return Err("Playwright access is limited to agent-profile panes; open one with profile: \"agent\"".into());
+        }
         if self.profile != "agent" && args["confirmed"] != true {
             return Err("This is a person-profile pane; owner authorization and confirmed: true are required".into());
         }
@@ -298,13 +308,17 @@ impl Browser {
         reply: Option<std::sync::mpsc::Sender<Value>>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        self.check_access(args)?;
+        self.check_command_access(name, args)?;
         #[cfg(target_os = "macos")]
         {
             let host = Rc::downgrade(self.host.as_ref().ok_or("Chromium is unavailable")?);
             let name = name.to_string();
-            let args = args.clone();
+            let mut args = args.clone();
             let pane = self.pane.clone();
+            if name == "browser.cdp" {
+                // New Playwright pages open beside the pane that minted the endpoint.
+                args["pane"] = pane.clone().into();
+            }
             cx.spawn(async move |_, cx| {
                 let result = async {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);

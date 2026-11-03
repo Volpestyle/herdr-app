@@ -105,7 +105,8 @@ wrap_focus_handler! {
     }
 }
 wrap_download_handler! {
-    struct Download { tx: Tx }
+    // A person sees Chromium's save dialog; agent downloads save to the app home.
+    struct Download { tx: Tx, ask: bool }
     impl DownloadHandler {
         fn can_download(&self, _browser: Option<&mut Browser>, url: Option<&CefString>, _method: Option<&CefString>) -> i32 {
             url.is_some_and(|url| web_url(&url.to_string()) && url.to_string() != "about:blank") as i32
@@ -118,7 +119,7 @@ wrap_download_handler! {
             let mut path = folder.join(name); let mut i = 1;
             while path.exists() { path = folder.join(format!("{i}-{}", name.to_string_lossy())); i += 1; }
             if let Some(callback) = callback {
-                callback.cont(Some(&CefString::from(path.to_string_lossy().as_ref())), 0);
+                callback.cont(Some(&CefString::from(path.to_string_lossy().as_ref())), self.ask as i32);
                 let _ = self.tx.try_send(Event::Notice(format!("Downloading to {}", path.display())));
             }
             1
@@ -132,14 +133,14 @@ wrap_download_handler! {
     }
 }
 wrap_client! {
-    struct PageClient { tx: Tx, gate: Arc<AtomicBool>, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>>, container: Retained<NSView> }
+    struct PageClient { tx: Tx, ask: bool, gate: Arc<AtomicBool>, browser: std::rc::Weak<RefCell<Option<Browser>>>, closing: Rc<Cell<bool>>, pending: Rc<Cell<bool>>, container: Retained<NSView> }
     impl Client {
         fn display_handler(&self) -> Option<DisplayHandler> { Some(Display::new(self.tx.clone())) }
         fn load_handler(&self) -> Option<LoadHandler> { Some(Load::new(self.tx.clone())) }
         fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new()) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone(), self.browser.clone(), self.closing.clone(), self.pending.clone())) }
         fn focus_handler(&self) -> Option<FocusHandler> { Some(Focus::new(self.gate.clone())) }
-        fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone())) }
+        fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone(), self.ask)) }
     }
 }
 pub struct Host {
@@ -256,6 +257,7 @@ impl Host {
         // its pane closes while the request context is loading.
         let mut client = PageClient::new(
             tx.clone(),
+            profile != "agent",
             focus_gate.clone(),
             Rc::downgrade(&browser),
             closing.clone(),
