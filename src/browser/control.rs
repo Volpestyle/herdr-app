@@ -59,6 +59,7 @@ pub struct Control {
     _registration: Registration,
     snapshot: RefCell<Snapshot>,
     busy: Cell<bool>,
+    pointer: Box<dyn Fn(f64, f64) -> bool>,
 }
 struct Busy<'a>(&'a Cell<bool>);
 impl Drop for Busy<'_> {
@@ -68,7 +69,7 @@ impl Drop for Busy<'_> {
 }
 
 impl Control {
-    pub fn new(browser: &Browser) -> Result<Self, String> {
+    pub fn new(browser: &Browser, pointer: Box<dyn Fn(f64, f64) -> bool>) -> Result<Self, String> {
         let host = browser.host().ok_or("Browser is closed")?;
         let pending = Rc::new(RefCell::new(HashMap::new()));
         let epoch = Rc::new(Cell::new(0));
@@ -84,6 +85,7 @@ impl Control {
             _registration: registration,
             snapshot: RefCell::new(Snapshot::default()),
             busy: Cell::new(false),
+            pointer,
         })
     }
 
@@ -386,6 +388,9 @@ impl Control {
             .await?;
         if contains["result"]["value"] != true {
             return Err("Element is covered; snapshot again".into());
+        }
+        if (self.pointer)(x, y) {
+            ex.timer(Duration::from_millis(350)).await;
         }
         for kind in ["mousePressed", "mouseReleased"] {
             self.call(

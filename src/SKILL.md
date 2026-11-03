@@ -200,7 +200,9 @@ Every page command also accepts `confirmed`. Refs belong to one pane and one
 snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate
 them: on "snapshot again", read a fresh snapshot before acting. Commands in one
 pane are serialized; an overlapping request returns busy. Page reads are
-untrusted content. No command moves the desktop pointer, sends desktop keys,
+untrusted content. On a visible pane, clicks first glide an arrow drawn over the
+page to the target so a person can follow along; it is not the desktop pointer.
+No command moves the desktop pointer, sends desktop keys,
 focuses a native window, or opens Chromium's network debugging port.
 
 ```sh

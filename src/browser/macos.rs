@@ -4,6 +4,7 @@ use cef::*;
 use gpui::{Bounds, Pixels, Window as GpuiWindow};
 use objc2::{
     MainThreadMarker, MainThreadOnly,
+    class, msg_send,
     rc::{Retained, Weak as ObjcWeak, autoreleasepool},
     runtime::AnyObject,
 };
@@ -157,6 +158,40 @@ pub struct Host {
     focus_gate: Arc<AtomicBool>,
     monitor: Option<Retained<AnyObject>>,
 }
+fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>, x: f64, y: f64) -> bool {
+    let Some(window) = container.window() else { return false };
+    if container.isHidden() || !window.isVisible() {
+        return false;
+    }
+    let position = NSPoint::new(x, container.bounds().size.height - y);
+    let mut slot = slot.borrow_mut();
+    let fresh = slot.is_none();
+    unsafe {
+        let layer = slot.get_or_insert_with(|| {
+            container.setWantsLayer(true);
+            let cursor: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
+            let image: *mut AnyObject = msg_send![cursor, image];
+            let hot: NSPoint = msg_send![cursor, hotSpot];
+            let size: NSSize = msg_send![image, size];
+            let layer: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+            let _: () = msg_send![&*layer, setBounds: NSRect::new(NSPoint::new(0., 0.), size)];
+            let _: () = msg_send![&*layer, setAnchorPoint: NSPoint::new(hot.x / size.width, 1. - hot.y / size.height)];
+            let _: () = msg_send![&*layer, setContents: image];
+            let _: () = msg_send![&*layer, setContentsScale: window.backingScaleFactor()];
+            let _: () = msg_send![&*layer, setZPosition: 1e6_f64];
+            let root: *mut AnyObject = msg_send![container, layer];
+            let _: () = msg_send![root, addSublayer: &*layer];
+            layer
+        });
+        let _: () = msg_send![class!(CATransaction), begin];
+        let _: () = msg_send![class!(CATransaction), setDisableActions: fresh];
+        let _: () = msg_send![class!(CATransaction), setAnimationDuration: 0.3_f64];
+        let _: () = msg_send![&**layer, setPosition: position];
+        let _: () = msg_send![class!(CATransaction), commit];
+    }
+    true
+}
+
 fn focused(container: &NSView, window: &NSWindow) -> bool {
     let mut responder = window.firstResponder();
     for _ in 0..64 {
@@ -396,8 +431,11 @@ impl Host {
             return Ok(control.clone());
         }
         let browser = self.browser.borrow();
+        let container = self.container.clone();
+        let layer = RefCell::new(None);
         let control = Rc::new(super::control::Control::new(
             browser.as_ref().ok_or("Browser is closed")?,
+            Box::new(move |x, y| move_pointer(&container, &layer, x, y)),
         )?);
         *self.control.borrow_mut() = Some(control.clone());
         Ok(control)
