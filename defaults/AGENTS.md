@@ -688,6 +688,8 @@ What's about the user, never a look:
   `p` writes Linux primary selection. `s` is ignored; cut buffers `0`–`7`
   are treated as the system clipboard.
   Clipboard reads (`?`) are never allowed.
+- `agent_cursor`: `"cute"` gives the arrow that browser clicks glide over the page
+  a face (default: a plain violet arrow). Applies to panes opened afterwards.
 - `telemetry`: `false` stops anonymous usage data and deletes what wasn't
   sent (on when absent; Settings → Privacy shows each report word for
   word, and `telemetry()` in mods). Once a day the app sends counts:
