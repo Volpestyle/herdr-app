@@ -29,6 +29,7 @@ pub fn is_page_command(name: &str) -> bool {
             | "browser.scroll"
             | "browser.wait"
             | "browser.screenshot"
+            | "browser.record"
     )
 }
 
@@ -92,6 +93,7 @@ pub struct Browser {
     allowed: Rc<Cell<bool>>,
     #[cfg(target_os = "macos")]
     host: Option<Rc<macos::Host>>,
+    recording: Cell<bool>,
     _input: Subscription,
     _events: Task<()>,
 }
@@ -149,6 +151,7 @@ impl Browser {
             loading: true,
             error,
             notice: None,
+            recording: Cell::new(false),
             allowed,
             #[cfg(target_os = "macos")]
             host,
@@ -319,7 +322,7 @@ impl Browser {
                 // New Playwright pages open beside the pane that minted the endpoint.
                 args["pane"] = pane.clone().into();
             }
-            cx.spawn(async move |_, cx| {
+            cx.spawn(async move |this, cx| {
                 let result = async {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
                     let control = loop {
@@ -339,6 +342,16 @@ impl Browser {
                     control.run(&name, &args, cx.background_executor()).await
                 }
                 .await;
+                if name == "browser.record" {
+                    let recording = match &result {
+                        Ok(value) => value["recording"] == true,
+                        Err(_) => args["action"] != "start",
+                    };
+                    let _ = this.update(cx, |browser, cx| {
+                        browser.recording.set(recording);
+                        cx.notify();
+                    });
+                }
                 let value = match result {
                     Ok(mut value) => {
                         value["pane"] = pane.into();
@@ -449,6 +462,32 @@ impl Render for Browser {
                         .text_size(px(13.))
                         .child(Input::new(&self.input)),
                 )
+                .child({
+                    let recording = self.recording.get();
+                    div()
+                        .id("browser-record")
+                        .h(px(30.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .text_color(if recording { color("blocked") } else { color("muted") })
+                        .hover(|s| s.bg(color("hover")))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let action = if this.recording.get() { "stop" } else { "start" };
+                            this.recording.set(action == "start");
+                            if let Err(error) = this.page_command("browser.record", &json!({"action":action,"confirmed":true}), None, cx) {
+                                this.recording.set(false);
+                                this.error = Some(error);
+                            }
+                            cx.notify();
+                        }))
+                        .child(div().size(px(9.)).rounded(px(if recording { 2. } else { 5. })).bg(color("blocked")))
+                        .child(if recording { "Stop" } else { "Rec" })
+                })
                 .child(div().text_size(px(11.)).text_color(color("muted")).child(
                     if self.loading {
                         "Loading…"

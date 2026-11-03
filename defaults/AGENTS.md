@@ -1046,6 +1046,11 @@ Page commands return their result through `herdr-browser do`:
   `screenshots/`, including when the window is not key. Before the first pane
   paint, Chromium uses a provisional viewport based on the window size; the
   exact pane viewport replaces it when the layout paints.
+- `browser.record {pane?, action}`: `start` records the page (Chromium's own frames, no
+  desktop capture or Screen Recording permission) with a drawn cursor and click ripples;
+  `stop` writes `recordings/<id>/events.json` under the app home and encodes `raw.mp4`
+  with ffmpeg in the background, then reveals it. The folder is screen-polish's
+  `render.cjs`/`stills.cjs` input. The toolbar's Rec button does the same.
 
 Every page command also accepts `confirmed`. Refs belong to one pane and one
 snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate

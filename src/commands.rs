@@ -46,6 +46,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("browser.scroll", &[opt("ref"), opt("name"), opt("role"), opt("nth"), opt("dy"), opt("pane"), opt("confirmed")], "Scroll a snapshot ref into view or the page by dy CSS pixels."),
     cmd("browser.wait", &[opt("text"), opt("url"), opt("load"), opt("timeout"), opt("pane"), opt("confirmed")], "Wait for visible text, URL substring, or load: true; timeout in ms (max 120000)."),
     cmd("browser.screenshot", &[opt("pane"), opt("confirmed")], "Capture the page as PNG under the app home; no desktop capture."),
+    cmd("browser.record", &[req("action"), opt("pane"), opt("confirmed")], "Start or stop recording the page (action start|stop) to recordings/<id>/raw.mp4 + events.json for screen-polish."),
     cmd("browser.devtools", &[opt("pane"), opt("confirmed")], "Open Chromium's developer inspector for a native browser."),
     // What exists.
     cmd("space.new", &[opt("name"), opt("folder"), opt("tab"), opt("argv"), opt("task"), opt("machine")],

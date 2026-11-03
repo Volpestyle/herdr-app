@@ -459,6 +459,7 @@ impl Host {
         let control = Rc::new(super::control::Control::new(
             browser.as_ref().ok_or("Browser is closed")?,
             Box::new(move |x, y| move_pointer(&container, &layer, x, y)),
+            if cute_cursor() { CUTE_AGENT_CURSOR } else { AGENT_CURSOR },
         )?);
         *self.control.borrow_mut() = Some(control.clone());
         Ok(control)

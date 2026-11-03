@@ -12,10 +12,73 @@ use std::{
 };
 
 static NEXT_REF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static NEXT_ACK: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1 << 30);
+
+struct Recording {
+    dir: std::path::PathBuf,
+    t0: f64,
+    size: (f64, f64, f64),
+    script: Option<String>,
+    frames: Vec<(std::path::PathBuf, f64)>,
+}
+
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0., |d| d.as_secs_f64())
+}
+
+fn save_frame(recording: &mut Recording, params: &[u8], browser: Option<&mut Browser>) {
+    let Ok(frame) = serde_json::from_slice::<Value>(params) else { return };
+    if let Some(host) = browser.and_then(|b| b.host()) {
+        let id = NEXT_ACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let ack = json!({"id":id,"method":"Page.screencastFrameAck","params":{"sessionId":frame["sessionId"]}});
+        host.send_dev_tools_message(Some(&serde_json::to_vec(&ack).unwrap_or_default()));
+    }
+    let (Some(data), Some(ts)) = (frame["data"].as_str(), frame["metadata"]["timestamp"].as_f64()) else { return };
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else { return };
+    let path = recording.dir.join("frames").join(format!("{:06}.jpg", recording.frames.len()));
+    if std::fs::write(&path, bytes).is_ok() {
+        recording.frames.push((path, ts));
+    }
+}
+
+fn encode(recording: Recording, end: f64) -> Result<std::path::PathBuf, String> {
+    let (width, height, scale) = recording.size;
+    let events = json!([{"t":0,"type":"meta","width":width,"height":height,"scale":scale}]);
+    std::fs::write(recording.dir.join("events.json"), serde_json::to_string_pretty(&events).unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    let at: Vec<f64> = recording.frames.iter().map(|(_, ts)| (ts - recording.t0).max(0.)).collect();
+    let mut list = vec!["ffconcat version 1.0".to_string()];
+    for (i, (file, _)) in recording.frames.iter().enumerate() {
+        let from = if i == 0 { 0. } else { at[i] };
+        let to = at.get(i + 1).copied().unwrap_or(end - recording.t0);
+        list.push(format!("file '{}'", file.display()));
+        list.push(format!("duration {:.4}", (to - from).max(0.001)));
+    }
+    let last = recording.frames.last().ok_or("No frames were captured")?;
+    list.push(format!("file '{}'", last.0.display()));
+    let concat = recording.dir.join("frames.txt");
+    std::fs::write(&concat, list.join("\n")).map_err(|e| e.to_string())?;
+    let video = recording.dir.join("raw.mp4");
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i"])
+        .arg(&concat)
+        .args(["-vf", "fps=60,pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-preset", "medium", "-crf", "12", "-pix_fmt", "yuv420p"])
+        .arg(&video)
+        .status()
+        .map_err(|e| format!("ffmpeg is needed to encode recordings: {e}"))?;
+    if !status.success() {
+        return Err(format!("ffmpeg failed; frames kept in {}", recording.dir.display()));
+    }
+    let _ = std::fs::remove_dir_all(recording.dir.join("frames"));
+    let _ = std::fs::remove_file(concat);
+    Ok(video)
+}
 
 type Reply = async_channel::Sender<Result<Value, String>>;
 wrap_dev_tools_message_observer! {
-    struct Observer { pending: Rc<RefCell<HashMap<i32, Reply>>>, epoch: Rc<Cell<u64>> }
+    struct Observer { pending: Rc<RefCell<HashMap<i32, Reply>>>, epoch: Rc<Cell<u64>>, recording: Rc<RefCell<Option<Recording>>> }
     impl DevToolsMessageObserver {
         fn on_dev_tools_method_result(&self, _browser: Option<&mut Browser>, id: i32, success: i32, result: Option<&[u8]>) {
             if let Some(tx) = self.pending.borrow_mut().remove(&id) {
@@ -28,7 +91,13 @@ wrap_dev_tools_message_observer! {
                 let _ = tx.try_send(answer);
             }
         }
-        fn on_dev_tools_event(&self, _browser: Option<&mut Browser>, method: Option<&CefString>, _params: Option<&[u8]>) {
+        fn on_dev_tools_event(&self, browser: Option<&mut Browser>, method: Option<&CefString>, params: Option<&[u8]>) {
+            if method.is_some_and(|m| m.to_string() == "Page.screencastFrame") {
+                if let (Some(recording), Some(params)) = (self.recording.borrow_mut().as_mut(), params) {
+                    save_frame(recording, params, browser);
+                }
+                return;
+            }
             if method.is_some_and(|m| matches!(m.to_string().as_str(),
                 "DOM.documentUpdated" | "DOM.childNodeInserted" | "DOM.childNodeRemoved" |
                 "DOM.attributeModified" | "DOM.attributeRemoved" | "DOM.characterDataModified" |
@@ -60,6 +129,8 @@ pub struct Control {
     snapshot: RefCell<Snapshot>,
     busy: Cell<bool>,
     pointer: Box<dyn Fn(f64, f64) -> bool>,
+    cursor: &'static [u8],
+    recording: Rc<RefCell<Option<Recording>>>,
 }
 struct Busy<'a>(&'a Cell<bool>);
 impl Drop for Busy<'_> {
@@ -69,11 +140,12 @@ impl Drop for Busy<'_> {
 }
 
 impl Control {
-    pub fn new(browser: &Browser, pointer: Box<dyn Fn(f64, f64) -> bool>) -> Result<Self, String> {
+    pub fn new(browser: &Browser, pointer: Box<dyn Fn(f64, f64) -> bool>, cursor: &'static [u8]) -> Result<Self, String> {
         let host = browser.host().ok_or("Browser is closed")?;
         let pending = Rc::new(RefCell::new(HashMap::new()));
         let epoch = Rc::new(Cell::new(0));
-        let mut observer = Observer::new(pending.clone(), epoch.clone());
+        let recording = Rc::new(RefCell::new(None));
+        let mut observer = Observer::new(pending.clone(), epoch.clone(), recording.clone());
         let registration = host
             .add_dev_tools_message_observer(Some(&mut observer))
             .ok_or("Cannot observe Chromium")?;
@@ -86,6 +158,8 @@ impl Control {
             snapshot: RefCell::new(Snapshot::default()),
             busy: Cell::new(false),
             pointer,
+            cursor,
+            recording,
         })
     }
 
@@ -403,6 +477,61 @@ impl Control {
         Ok(())
     }
 
+    async fn record_start(&self, ex: &BackgroundExecutor) -> Result<Value, String> {
+        if self.recording.borrow().is_some() {
+            return Err("This pane is already recording".into());
+        }
+        let size = self.evaluate("[innerWidth, innerHeight, devicePixelRatio]", ex).await?;
+        let number = |i: usize| size[i].as_f64().filter(|n| *n > 0.).ok_or("Page has no viewport");
+        let size = (number(0)?, number(1)?, number(2)?);
+        let t0 = now();
+        let dir = crate::mods::app_dir().join("recordings").join(format!("{}", (t0 * 1000.) as u64));
+        std::fs::create_dir_all(dir.join("frames")).map_err(|e| e.to_string())?;
+        let svg = String::from_utf8_lossy(self.cursor);
+        let source = RECORD_CURSOR.replace("__SVG__", &serde_json::to_string(&svg).unwrap_or_default());
+        self.call("Page.enable", json!({}), ex).await?;
+        let script = self
+            .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source}), ex)
+            .await?["identifier"]
+            .as_str()
+            .map(str::to_string);
+        self.call("Runtime.evaluate", json!({"expression":source}), ex).await?;
+        *self.recording.borrow_mut() = Some(Recording { dir: dir.clone(), t0, size, script, frames: Vec::new() });
+        let started = self
+            .call("Page.startScreencast", json!({"format":"jpeg","quality":90,"maxWidth":(size.0 * size.2) as i64,"maxHeight":(size.1 * size.2) as i64,"everyNthFrame":1}), ex)
+            .await;
+        if let Err(error) = started {
+            self.recording.borrow_mut().take();
+            return Err(error);
+        }
+        Ok(json!({"recording":true,"dir":dir}))
+    }
+
+    async fn record_stop(&self, ex: &BackgroundExecutor) -> Result<Value, String> {
+        let recording = self.recording.borrow_mut().take().ok_or("This pane is not recording")?;
+        let end = now();
+        let _ = self.call("Page.stopScreencast", json!({}), ex).await;
+        if let Some(id) = &recording.script {
+            let _ = self.call("Page.removeScriptToEvaluateOnNewDocument", json!({"identifier":id}), ex).await;
+        }
+        let _ = self.call("Runtime.evaluate", json!({"expression":"window.__herdrRecordStop?.()"}), ex).await;
+        let dir = recording.dir.clone();
+        let frames = recording.frames.len();
+        if frames == 0 {
+            return Err("No frames were captured; is the pane visible?".into());
+        }
+        ex.spawn(async move {
+            match encode(recording, end) {
+                Ok(video) => {
+                    let _ = std::process::Command::new("open").arg("-R").arg(video).status();
+                }
+                Err(error) => tracing::warn!("browser recording: {error}"),
+            }
+        })
+        .detach();
+        Ok(json!({"recording":false,"dir":dir,"video":dir.join("raw.mp4"),"frames":frames,"encoding":true}))
+    }
+
     async fn press(&self, key: &str, ex: &BackgroundExecutor) -> Result<(), String> {
         if self.evaluate("(() => { let e=document.activeElement; while(e?.shadowRoot?.activeElement) e=e.shadowRoot.activeElement; return !!e?.matches('input[type=password],iframe,frame,object,embed'); })()", ex).await? == true {
             return Err("Password fields are refused; use browser.signin".into());
@@ -544,6 +673,11 @@ impl Control {
         }
         let _busy = Busy(&self.busy);
         match command {
+            "browser.record" => match args["action"].as_str() {
+                Some("start") => self.record_start(ex).await,
+                Some("stop") => self.record_stop(ex).await,
+                _ => Err("action must be start or stop".into()),
+            },
             "browser.cdp" => {
                 // The pane's own target names the agent profile the bridge exposes.
                 let info = self.call("Target.getTargetInfo", json!({}), ex).await?;
@@ -852,6 +986,48 @@ impl Control {
         }
     }
 }
+
+const RECORD_CURSOR: &str = r#"(() => {
+  if (window.__herdrRecordStop) return;
+  const svg = __SVG__;
+  let cursor, x = 0, y = 0, tx = 0, ty = 0, moving = false, seen = false;
+  const place = () => { if (cursor) cursor.style.transform = `translate(${x - 4.5}px, ${y - 3}px)`; };
+  const tick = () => {
+    x += (tx - x) * 0.45; y += (ty - y) * 0.45;
+    if (Math.abs(tx - x) < 0.3 && Math.abs(ty - y) < 0.3) { x = tx; y = ty; moving = false; }
+    place();
+    if (moving) requestAnimationFrame(tick);
+  };
+  const mount = () => {
+    if (cursor || !document.documentElement) return;
+    cursor = document.createElement('div');
+    cursor.style.cssText = 'position:fixed;left:0;top:0;width:28px;height:28px;z-index:2147483647;pointer-events:none;display:none';
+    cursor.innerHTML = svg;
+    document.documentElement.appendChild(cursor);
+  };
+  const to = (e) => {
+    mount();
+    tx = e.clientX; ty = e.clientY;
+    if (!seen) { seen = true; x = tx; y = ty; cursor.style.display = 'block'; }
+    if (!moving) { moving = true; requestAnimationFrame(tick); }
+  };
+  const ripple = (e) => {
+    to(e);
+    const r = document.createElement('div');
+    r.style.cssText = `position:fixed;left:${e.clientX - 14}px;top:${e.clientY - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(0,0,0,.4);box-shadow:0 0 0 1px rgba(255,255,255,.6);z-index:2147483646;pointer-events:none;transition:transform .45s ease-out,opacity .45s ease-out`;
+    document.documentElement.appendChild(r);
+    requestAnimationFrame(() => { r.style.transform = 'scale(1.9)'; r.style.opacity = '0'; });
+    setTimeout(() => r.remove(), 500);
+  };
+  addEventListener('mousemove', to, true);
+  addEventListener('mousedown', ripple, true);
+  window.__herdrRecordStop = () => {
+    removeEventListener('mousemove', to, true);
+    removeEventListener('mousedown', ripple, true);
+    cursor?.remove();
+    delete window.__herdrRecordStop;
+  };
+})()"#;
 
 struct Login {
     username: String,
