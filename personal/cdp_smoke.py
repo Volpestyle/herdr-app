@@ -37,6 +37,15 @@ def handshake(port, path, host=None, origin=None):
         return s.recv(4096).decode(errors='replace').split('\r\n', 1)[0]
 
 
+def pipe_holders(app_pid):
+    """Processes other than the app holding the app's DevTools pipe ends (fds 3/4)."""
+    out = subprocess.run(['/usr/sbin/lsof', '-nP', '-a', '-u', str(os.getuid()), '-d', '3,4'], capture_output=True, text=True).stdout
+    rows = [line.split() for line in out.splitlines()[1:]]
+    ends = {r[5] for r in rows if len(r) > 5 and r[1] == str(app_pid) and r[4] == 'PIPE'}
+    assert len(ends) == 2, f'app fds 3/4 are not the DevTools pipe: {out}'
+    return [' '.join(r) for r in rows if len(r) > 5 and r[1] != str(app_pid) and r[5] in ends]
+
+
 def listeners(pid):
     out = subprocess.run(['/usr/sbin/lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
     return [line for line in out.splitlines()[1:] if line.strip()]
@@ -123,6 +132,12 @@ def main():
         loaded(person, 'Agent control fixture', confirmed=True)
         agent = command('browser.open', profile='agent', url=agent_url + '?set=agent', place='tab')['pane']
         loaded(agent, 'Agent control fixture')
+        # The control socket is owner-only, and nothing the app spawned (core,
+        # pane shell) inherited the DevTools pipe.
+        result['socket_mode'] = oct((home / 'herdr-app.sock').stat().st_mode & 0o777)
+        assert result['socket_mode'] == '0o600', result['socket_mode']
+        result['pipe_holders'] = pipe_holders(app.pid)
+        assert not result['pipe_holders'], result['pipe_holders']
         result['listeners_before'] = listeners(app.pid)
         assert not result['listeners_before'], result['listeners_before']
 
