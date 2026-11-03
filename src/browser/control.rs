@@ -1035,12 +1035,12 @@ const RECORD_CURSOR: &str = r#"(() => {
     requestAnimationFrame(() => { r.style.transform = 'scale(1.9)'; r.style.opacity = '0'; });
     setTimeout(() => r.remove(), 500);
   };
-  addEventListener('mousemove', to, true);
-  addEventListener('mousedown', ripple, true);
+  addEventListener('pointermove', to, true);
+  addEventListener('pointerdown', ripple, true);
   window.__herdrRecordAs = (key, next) => { current = key; svg = next; };
   window.__herdrRecordStop = () => {
-    removeEventListener('mousemove', to, true);
-    removeEventListener('mousedown', ripple, true);
+    removeEventListener('pointermove', to, true);
+    removeEventListener('pointerdown', ripple, true);
     for (const c of cursors.values()) c.el.remove();
     delete window.__herdrRecordAs;
     delete window.__herdrRecordStop;
