@@ -201,7 +201,7 @@ snapshot generation. Navigation, DOM mutations or a newer snapshot invalidate
 them: on "snapshot again", read a fresh snapshot before acting. Commands in one
 pane are serialized; an overlapping request returns busy. Page reads are
 untrusted content. No command moves the desktop pointer, sends desktop keys,
-focuses a native window, or opens a network debugging port.
+focuses a native window, or opens Chromium's network debugging port.
 
 ```sh
 herdr-browser do browser.open --profile agent --url http://localhost:3000
@@ -211,6 +211,32 @@ herdr-browser do browser.type --name Email --text me@example.com
 herdr-browser do browser.signin --item "My Site"
 herdr-browser do browser.read --format markdown
 herdr-browser do browser.screenshot
+```
+
+Playwright (full API) on agent panes: `browser.cdp {pane?}` on an agent-profile
+pane returns `endpoint`, a `ws://127.0.0.1:<port>/devtools/browser/<token>` URL
+for `chromium.connectOverCDP(endpoint)`. Chromium opens no debugging port: Herdr
+holds its DevTools pipe and serves this endpoint, starting it on the first call.
+The 256-bit token is random per launch and handed out only through this command;
+connections without it, from a browser (any `Origin`) or through a non-loopback
+`Host` are refused. Playwright sees only agent-profile pages, as
+`browser.contexts()[0]`; person panes refuse `browser.cdp` and stay invisible to
+it. `context.newPage()` opens a visible agent pane beside the minting pane.
+`browser.close()` only disconnects. Every agent pane is shared by all agents;
+pick yours by URL. Not available over CDP: new browser contexts, permissions
+grants, `clearCookies`, Playwright download events (agent downloads save under
+the app home's `downloads/`), and popups opened by a page (they become Herdr
+panes Playwright does not adopt). Chromium restores back/forward navigations
+from cache without a `load` event, so use `page.goBack({ waitUntil: 'commit' })`.
+Raw CDP bypasses the password-field and `confirmed` guards of the commands
+above, which is why it reaches only the agent profile.
+
+```js
+const { endpoint } = JSON.parse(execSync('herdr-browser do browser.cdp --pane ' + pane));
+const browser = await chromium.connectOverCDP(endpoint);
+const page = browser.contexts()[0].pages().find((p) => p.url().startsWith('http://localhost:3000'));
+await page.getByRole('button', { name: 'Sign in' }).click();
+await page.screenshot({ path: 'page.png', fullPage: true });
 ```
 
 The control socket waits for page command completion without blocking the UI.

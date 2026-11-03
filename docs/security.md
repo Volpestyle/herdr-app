@@ -39,6 +39,26 @@ switch; do not enable it for ordinary agent control. Page input uses Chromium
 Screenshots capture the page, not the screen, and stay under the app home's
 `screenshots/` directory. They and returned page text can contain private data.
 
+`browser.cdp` gives Playwright raw CDP over a bridge, not Chromium's debugging
+port: Herdr reserves fds 3/4 at startup, launches Chromium with
+`--remote-debugging-pipe`, and serves a WebSocket on 127.0.0.1 only after the
+first `browser.cdp`. The path carries a 256-bit random per-launch token that the
+command returns over the control socket, so the endpoint has the socket's trust
+line. Upgrades with any `Origin` (web pages) or a non-loopback `Host` (DNS
+rebinding) are refused even with the token. Each client gets its own browser
+session; the bridge hides every target outside the agent profile (releasing
+and detaching paused ones), refuses browser-level methods by default, denies
+methods that create or dispose contexts, attach to the browser target, close or
+crash the browser, or touch default-context storage, and translates Playwright's
+cookie calls to page-scoped `Network` calls on an agent page. New pages are
+real agent panes. Raw CDP bypasses `browser.type`'s password refusal and the
+`confirmed` guard, so it never reaches person panes. Pages and CDP clients
+share the agent profile's cookies; agent panes are shared by all
+agents.
+
+Downloads in person panes open Chromium's save dialog; agent-pane downloads
+save under the app home's `downloads/` without a prompt.
+
 `browser.open` defaults to `profile: "person"` for compatibility. Agent work
 uses `profile: "agent"`, a separate CEF request context with cookies/storage
 under `chromium/Agent`, beside the person's `chromium/Default`. Agent panes

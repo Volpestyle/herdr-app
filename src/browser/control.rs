@@ -539,6 +539,16 @@ impl Control {
         }
         let _busy = Busy(&self.busy);
         match command {
+            "browser.cdp" => {
+                // The pane's own target names the agent profile the bridge exposes.
+                let info = self.call("Target.getTargetInfo", json!({}), ex).await?;
+                let target = &info["targetInfo"];
+                let context = target["browserContextId"]
+                    .as_str()
+                    .ok_or("Chromium did not name this page's profile")?;
+                let endpoint = super::cdp::endpoint(context, args["pane"].as_str())?;
+                Ok(json!({"endpoint":endpoint,"targetId":target["targetId"],"type":target["type"],"url":target["url"]}))
+            }
             "browser.snapshot" => {
                 // A failed snapshot invalidates all previous refs, too.
                 self.snapshot.borrow_mut().refs.clear();

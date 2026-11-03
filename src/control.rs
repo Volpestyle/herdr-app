@@ -69,6 +69,22 @@ fn raise_running_at(path: &std::path::Path) -> bool {
     true
 }
 
+/// One `do` command from a background thread inside the app, as a client sends it.
+pub fn request(command: &str, args: Value) -> Result<Value, String> {
+    let mut stream = UnixStream::connect(socket()).map_err(|e| format!("no Herdr window: {e}"))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    stream
+        .write_all(format!("{}\n", json!({ "do": command, "args": args })).as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    BufReader::new(&stream).read_line(&mut line).map_err(|e| e.to_string())?;
+    let reply: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    match reply.get("error").and_then(Value::as_str) {
+        Some(error) => Err(error.to_string()),
+        None => Ok(reply),
+    }
+}
+
 /// The client side; returns the process exit code.
 pub fn client(args: &[String]) -> i32 {
     if args == ["commands"] {
