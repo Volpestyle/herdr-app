@@ -128,8 +128,9 @@ pub struct Control {
     _registration: Registration,
     snapshot: RefCell<Snapshot>,
     busy: Cell<bool>,
-    pointer: Box<dyn Fn(f64, f64) -> bool>,
-    cursor: &'static [u8],
+    pointer: Box<dyn Fn(Option<&str>, f64, f64) -> bool>,
+    caller: RefCell<Option<String>>,
+    cursor: fn(Option<&str>) -> Vec<u8>,
     recording: Rc<RefCell<Option<Recording>>>,
 }
 struct Busy<'a>(&'a Cell<bool>);
@@ -140,7 +141,7 @@ impl Drop for Busy<'_> {
 }
 
 impl Control {
-    pub fn new(browser: &Browser, pointer: Box<dyn Fn(f64, f64) -> bool>, cursor: &'static [u8]) -> Result<Self, String> {
+    pub fn new(browser: &Browser, pointer: Box<dyn Fn(Option<&str>, f64, f64) -> bool>, cursor: fn(Option<&str>) -> Vec<u8>) -> Result<Self, String> {
         let host = browser.host().ok_or("Browser is closed")?;
         let pending = Rc::new(RefCell::new(HashMap::new()));
         let epoch = Rc::new(Cell::new(0));
@@ -158,6 +159,7 @@ impl Control {
             snapshot: RefCell::new(Snapshot::default()),
             busy: Cell::new(false),
             pointer,
+            caller: RefCell::new(None),
             cursor,
             recording,
         })
@@ -463,7 +465,13 @@ impl Control {
         if contains["result"]["value"] != true {
             return Err("Element is covered; snapshot again".into());
         }
-        if (self.pointer)(x, y) {
+        let caller = self.caller.borrow().clone();
+        if self.recording.borrow().is_some() {
+            let svg = String::from_utf8_lossy(&(self.cursor)(caller.as_deref())).into_owned();
+            let expression = format!("window.__herdrRecordAs?.({}, {})", json!(caller.as_deref().unwrap_or_default()), json!(svg));
+            self.call("Runtime.evaluate", json!({"expression":expression}), ex).await?;
+        }
+        if (self.pointer)(caller.as_deref(), x, y) {
             ex.timer(Duration::from_millis(350)).await;
         }
         for kind in ["mousePressed", "mouseReleased"] {
@@ -487,8 +495,7 @@ impl Control {
         let t0 = now();
         let dir = crate::mods::app_dir().join("recordings").join(format!("{}", (t0 * 1000.) as u64));
         std::fs::create_dir_all(dir.join("frames")).map_err(|e| e.to_string())?;
-        let svg = String::from_utf8_lossy(self.cursor);
-        let source = RECORD_CURSOR.replace("__SVG__", &serde_json::to_string(&svg).unwrap_or_default());
+        let source = RECORD_CURSOR.replace("__SVG__", &serde_json::to_string(&String::from_utf8_lossy(&(self.cursor)(None))).unwrap_or_default());
         self.call("Page.enable", json!({}), ex).await?;
         let script = self
             .call("Page.addScriptToEvaluateOnNewDocument", json!({"source":source}), ex)
@@ -672,6 +679,7 @@ impl Control {
             return Err("Another command is running in this pane; wait for its reply".into());
         }
         let _busy = Busy(&self.busy);
+        *self.caller.borrow_mut() = args["caller"].as_str().map(str::to_owned);
         match command {
             "browser.record" => match args["action"].as_str() {
                 Some("start") => self.record_start(ex).await,
@@ -989,27 +997,35 @@ impl Control {
 
 const RECORD_CURSOR: &str = r#"(() => {
   if (window.__herdrRecordStop) return;
-  const svg = __SVG__;
-  let cursor, x = 0, y = 0, tx = 0, ty = 0, moving = false, seen = false;
-  const place = () => { if (cursor) cursor.style.transform = `translate(${x - 4.5}px, ${y - 3}px)`; };
-  const tick = () => {
-    x += (tx - x) * 0.45; y += (ty - y) * 0.45;
-    if (Math.abs(tx - x) < 0.3 && Math.abs(ty - y) < 0.3) { x = tx; y = ty; moving = false; }
-    place();
-    if (moving) requestAnimationFrame(tick);
+  const cursors = new Map();
+  let current = '', svg = __SVG__;
+  const place = (c) => { c.el.style.transform = `translate(${c.x - 4.5}px, ${c.y - 3}px)`; };
+  const tick = (c) => {
+    c.x += (c.tx - c.x) * 0.45; c.y += (c.ty - c.y) * 0.45;
+    if (Math.abs(c.tx - c.x) < 0.3 && Math.abs(c.ty - c.y) < 0.3) { c.x = c.tx; c.y = c.ty; c.moving = false; }
+    place(c);
+    if (c.moving) requestAnimationFrame(() => tick(c));
   };
   const mount = () => {
-    if (cursor || !document.documentElement) return;
-    cursor = document.createElement('div');
-    cursor.style.cssText = 'position:fixed;left:0;top:0;width:28px;height:28px;z-index:2147483647;pointer-events:none;display:none';
-    cursor.innerHTML = svg;
-    document.documentElement.appendChild(cursor);
+    let c = cursors.get(current);
+    if (c?.el.isConnected || !document.documentElement) return c;
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;left:0;top:0;width:28px;height:28px;z-index:2147483647;pointer-events:none;opacity:0;transition:opacity .4s';
+    el.innerHTML = svg;
+    document.documentElement.appendChild(el);
+    c = { el, x: 0, y: 0, tx: 0, ty: 0, moving: false, seen: false, timer: 0 };
+    cursors.set(current, c);
+    return c;
   };
   const to = (e) => {
-    mount();
-    tx = e.clientX; ty = e.clientY;
-    if (!seen) { seen = true; x = tx; y = ty; cursor.style.display = 'block'; }
-    if (!moving) { moving = true; requestAnimationFrame(tick); }
+    const c = mount();
+    if (!c) return;
+    c.tx = e.clientX; c.ty = e.clientY;
+    if (!c.seen) { c.seen = true; c.x = c.tx; c.y = c.ty; place(c); }
+    c.el.style.opacity = '1';
+    clearTimeout(c.timer);
+    c.timer = setTimeout(() => { c.el.style.opacity = '0'; }, 5000);
+    if (!c.moving) { c.moving = true; requestAnimationFrame(() => tick(c)); }
   };
   const ripple = (e) => {
     to(e);
@@ -1021,10 +1037,12 @@ const RECORD_CURSOR: &str = r#"(() => {
   };
   addEventListener('mousemove', to, true);
   addEventListener('mousedown', ripple, true);
+  window.__herdrRecordAs = (key, next) => { current = key; svg = next; };
   window.__herdrRecordStop = () => {
     removeEventListener('mousemove', to, true);
     removeEventListener('mousedown', ripple, true);
-    cursor?.remove();
+    for (const c of cursors.values()) c.el.remove();
+    delete window.__herdrRecordAs;
     delete window.__herdrRecordStop;
   };
 })()"#;

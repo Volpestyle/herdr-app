@@ -16,6 +16,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     ptr::NonNull,
     rc::Rc,
     sync::{
@@ -168,18 +169,39 @@ fn cute_cursor() -> bool {
         .is_some_and(|v| v["agent_cursor"] == "cute")
 }
 
-fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>, x: f64, y: f64) -> bool {
+const AGENT_CURSOR_IDLE_SECS: f64 = 5.;
+
+const AGENT_COLORS: [&str; 8] = ["#3E63DD", "#E5484D", "#30A46C", "#F76B15", "#8E4EC6", "#12A594", "#D6409F", "#C29B00"];
+
+thread_local! {
+    static AGENT_COLOR_SLOTS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+}
+
+fn agent_cursor(caller: Option<&str>) -> Vec<u8> {
+    let svg = String::from_utf8_lossy(if cute_cursor() { CUTE_AGENT_CURSOR } else { AGENT_CURSOR }).into_owned();
+    let Some(caller) = caller else { return svg.into_bytes() };
+    let slot = AGENT_COLOR_SLOTS.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        let next = slots.len();
+        *slots.entry(caller.to_owned()).or_insert(next)
+    });
+    let fill = format!(r#"fill="{}""#, AGENT_COLORS[slot % AGENT_COLORS.len()]);
+    svg.replace(r##"fill="#000" fill-opacity=".5""##, &fill).replace(r#"fill="url(#g)""#, &fill).into_bytes()
+}
+
+fn move_pointer(container: &NSView, slots: &RefCell<HashMap<String, Retained<AnyObject>>>, caller: Option<&str>, x: f64, y: f64) -> bool {
     let Some(window) = container.window() else { return false };
     if container.isHidden() || !window.isVisible() {
         return false;
     }
     let position = NSPoint::new(x, container.bounds().size.height - y);
-    let mut slot = slot.borrow_mut();
-    let fresh = slot.is_none();
+    let mut slots = slots.borrow_mut();
+    let key = caller.unwrap_or_default().to_owned();
+    let fresh = !slots.contains_key(&key);
     unsafe {
-        let layer = slot.get_or_insert_with(|| {
+        let layer = slots.entry(key).or_insert_with(|| {
             container.setWantsLayer(true);
-            let svg = if cute_cursor() { CUTE_AGENT_CURSOR } else { AGENT_CURSOR };
+            let svg = agent_cursor(caller);
             let data: *mut AnyObject = msg_send![class!(NSData), dataWithBytes: svg.as_ptr().cast::<std::ffi::c_void>(), length: svg.len()];
             let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
             let image: *mut AnyObject = msg_send![image, initWithData: data];
@@ -192,6 +214,7 @@ fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>,
             let _: () = msg_send![&*layer, setContents: image];
             let _: () = msg_send![&*layer, setContentsScale: window.backingScaleFactor()];
             let _: () = msg_send![&*layer, setZPosition: 1e6_f64];
+            let _: () = msg_send![&*layer, setOpacity: 0_f32];
             let _: () = msg_send![&*layer, setShadowOpacity: 0.35_f32];
             let _: () = msg_send![&*layer, setShadowRadius: 3_f64];
             let _: () = msg_send![&*layer, setShadowOffset: NSSize::new(0., -1.)];
@@ -211,6 +234,15 @@ fn move_pointer(container: &NSView, slot: &RefCell<Option<Retained<AnyObject>>>,
         let _: () = msg_send![squish, setDuration: 0.25_f64];
         let _: () = msg_send![squish, setBeginTime: now + if fresh { 0.05 } else { 0.32 }];
         let _: () = msg_send![&**layer, addAnimation: squish, forKey: &*NSString::from_str("squish")];
+        let fade: *mut AnyObject = msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")];
+        let shown: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 1_f64];
+        let _: () = msg_send![fade, setFromValue: shown];
+        let hidden: *mut AnyObject = msg_send![class!(NSNumber), numberWithDouble: 0_f64];
+        let _: () = msg_send![fade, setToValue: hidden];
+        let _: () = msg_send![fade, setBeginTime: now + AGENT_CURSOR_IDLE_SECS];
+        let _: () = msg_send![fade, setDuration: 0.4_f64];
+        let _: () = msg_send![fade, setFillMode: &*NSString::from_str("backwards")];
+        let _: () = msg_send![&**layer, addAnimation: fade, forKey: &*NSString::from_str("fade")];
     }
     true
 }
@@ -455,11 +487,11 @@ impl Host {
         }
         let browser = self.browser.borrow();
         let container = self.container.clone();
-        let layer = RefCell::new(None);
+        let layers = RefCell::new(HashMap::new());
         let control = Rc::new(super::control::Control::new(
             browser.as_ref().ok_or("Browser is closed")?,
-            Box::new(move |x, y| move_pointer(&container, &layer, x, y)),
-            if cute_cursor() { CUTE_AGENT_CURSOR } else { AGENT_CURSOR },
+            Box::new(move |caller, x, y| move_pointer(&container, &layers, caller, x, y)),
+            agent_cursor,
         )?);
         *self.control.borrow_mut() = Some(control.clone());
         Ok(control)

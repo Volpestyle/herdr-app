@@ -689,7 +689,8 @@ What's about the user, never a look:
   are treated as the system clipboard.
   Clipboard reads (`?`) are never allowed.
 - `agent_cursor`: `"cute"` gives the arrow that browser clicks glide over the page
-  a face (default: a plain translucent black arrow). Applies to panes opened afterwards.
+  a face (default: a plain arrow). Each calling terminal gets its own cursor
+  color, so different agents are told apart. Applies to panes opened afterwards.
 - `telemetry`: `false` stops anonymous usage data and deletes what wasn't
   sent (on when absent; Settings → Privacy shows each report word for
   word, and `telemetry()` in mods). Once a day the app sends counts:

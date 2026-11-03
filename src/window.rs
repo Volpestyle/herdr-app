@@ -3658,7 +3658,9 @@ impl AppWindow {
                             crate::commands::validate_args(command, args)?;
                             if let Some(arg) = crate::commands::missing(command, args) { return Err(format!("{name} needs {arg}")); }
                             let view = args["pane"].as_str().and_then(|p| self.copies.get(p)).and_then(|c| c.browser.as_ref()).ok_or("No native browser at this pane; it may be closed")?;
-                            view.update(cx, |view, cx| view.page_command(&name, args, Some(reply.clone()), cx))
+                            let mut args = args.clone();
+                            if let Some(caller) = &caller { args["caller"] = caller.as_str().into(); }
+                            view.update(cx, |view, cx| view.page_command(&name, &args, Some(reply.clone()), cx))
                         })();
                         if let Err(error) = result { let _ = reply.send(json!({"error":error})); }
                         return;
