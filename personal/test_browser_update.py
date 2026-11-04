@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('browser_update', Path(__file__).with_name('browser_update.py'))
@@ -269,6 +270,105 @@ class BrowserBundleTests(unittest.TestCase):
             with plists[1].open('wb') as file: plistlib.dump(info, file)
             with self.assertRaisesRegex(RuntimeError, 'NSBluetoothAlwaysUsageDescription'):
                 updater.validate_browser_bundle(bundle)
+
+
+
+def chrome_post(title, text, published='2026-11-03T00:00:00Z'):
+    return {'title': {'$t': title}, 'published': {'$t': published}, 'content': {'$t': text}}
+
+
+# Shapes copied from the live feeds on 2026-11-04; tests never reach the network.
+STABLE = {'versions': [{'name': 'chrome/platforms/mac/channels/stable/versions/157.0.8103.39',
+                        'version': '157.0.8103.39'}]}
+RELEASES = {'feed': {'entry': [
+    chrome_post('Chrome for Android Update', '<p>Chrome 157.0.8103.40 for Android. This update includes 9 security fixes.</p>'),
+    chrome_post('Stable Channel Update for Desktop',
+                '<p>Chrome 157.0.8103.38 (Linux) 157.0.8103.38/.39 Windows/Mac contains a number of fixes.</p>'
+                '<p>This update includes 213 security fixes.</p>'),
+    chrome_post('Stable Channel Update for Desktop',
+                '<p>The Stable channel has been updated to 156.0.8078.79/.80 for Windows and Mac.</p>'
+                '<p>This update includes 21 security fixes.</p>', '2026-10-29T00:00:00Z'),
+    chrome_post('Stable Channel Update for Desktop',
+                '<p>The Stable channel has been updated to 156.0.8078.60/.61 for Windows and Mac.</p>'
+                '<p>This update includes 4 security fixes.</p>', '2026-10-20T00:00:00Z'),
+]}}
+
+
+class ChromiumFreshnessTests(unittest.TestCase):
+    """#705: how far Herdr Browser's own Chromium is behind stable Chrome, read-only."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        # Any live request fails the test rather than reaching the network.
+        offline = patch.object(updater.urllib.request, 'urlopen', side_effect=AssertionError('network in a test'))
+        offline.start(); self.addCleanup(offline.stop)
+
+    def app(self, version, name='Herdr Browser.app'):
+        """A bundle shaped like the installed one: CEF's plist names the branch, the binary the version."""
+        framework = self.root / name / 'Contents/Frameworks/Chromium Embedded Framework.framework'
+        (framework / 'Resources').mkdir(parents=True)
+        branch = version.split('.')[2]
+        with (framework / 'Resources/Info.plist').open('wb') as plist:
+            plistlib.dump({'CFBundleShortVersionString': '156.0.15.0',
+                           'SCMRevision': f'fb096c00-refs/branch-heads/{branch}@{{#1705}}'}, plist)
+        noise = b'\x00' * 4096 + b'1.0.' + branch.encode() + b'.2.3 ' + b'\x00' * 4096
+        (framework / 'Chromium Embedded Framework').write_bytes(
+            noise + f'Mozilla/5.0 Chrome/{version} Safari'.encode() + noise + version.encode() + noise)
+        return self.root / name
+
+    def feeds(self, url):
+        return STABLE if url == updater.CHROME_STABLE_FEED else RELEASES
+
+    def test_reads_the_embedded_chromium_from_the_bundle(self):
+        self.assertEqual(updater.embedded_chromium(self.app('156.0.8078.80')), '156.0.8078.80')
+        self.assertIsNone(updater.embedded_chromium(self.root / 'Missing.app'))
+
+    def test_an_older_build_counts_the_newer_stable_releases_with_security_fixes(self):
+        status = updater.chromium_status(self.app('156.0.8078.60'), self.feeds)
+        self.assertEqual({key: status[key] for key in (
+            'embedded', 'stable', 'upToDate', 'securityReleasesBehind', 'securityFixesBehind', 'atLeast', 'update')}, {
+            'embedded': '156.0.8078.60', 'stable': '157.0.8103.39', 'upToDate': False,
+            'securityReleasesBehind': 2, 'securityFixesBehind': 234, 'atLeast': False,
+            'update': 'herdr-browser-update check --force'})
+
+    def test_the_build_of_the_latest_desktop_post_is_not_counted_against_itself(self):
+        status = updater.chromium_status(self.app('156.0.8078.80'), self.feeds)
+        self.assertEqual((status['securityReleasesBehind'], status['securityFixesBehind']), (1, 213))
+
+    def test_current_stable_is_up_to_date(self):
+        status = updater.chromium_status(self.app('157.0.8103.39'), self.feeds)
+        self.assertEqual((status['upToDate'], status['securityReleasesBehind']), (True, 0))
+
+    def test_older_than_the_feed_reaches_is_a_lower_bound(self):
+        self.assertTrue(updater.chromium_status(self.app('150.0.7000.10'), self.feeds)['atLeast'])
+
+    def test_unreadable_feeds_are_reported_not_raised(self):
+        def down(url): raise urllib.error.URLError('offline')
+        status = updater.chromium_status(self.app('156.0.8078.80'), down)
+        self.assertEqual(status['embedded'], '156.0.8078.80')
+        self.assertIn('Stable Chrome release data unavailable', status['error'])
+        self.assertNotIn('securityReleasesBehind', status)
+        self.assertEqual(updater.chromium_status(self.root / 'Missing.app', down), {'installed': False})
+
+    def test_status_reports_freshness_without_the_update_lock_or_any_change(self):
+        app = self.app('156.0.8078.60')
+        local = self.root / 'local'; local.mkdir()
+        (local / 'state.json').write_text(json.dumps({'status': 'installed'}))
+        (local / 'lock').write_text('')
+        before = {path: path.stat().st_mtime_ns for path in [*local.iterdir(), *app.rglob('*')]}
+        output = io.StringIO()
+        with patch.object(updater, 'APP', app), patch.object(updater, 'LOCAL', local), \
+                patch.object(updater, 'fetch_json', self.feeds), patch.object(sys, 'argv', ['herdr-browser-update', 'status']), \
+                patch('sys.stdout', output), open(local / 'lock') as held:
+            # An update in progress holds the lock; status still answers.
+            updater.fcntl.flock(held, updater.fcntl.LOCK_EX | updater.fcntl.LOCK_NB)
+            self.assertEqual(updater.main(), 0)
+        printed = json.loads(output.getvalue())
+        self.assertEqual(printed['status'], 'installed')
+        self.assertEqual(printed['chromium']['securityReleasesBehind'], 2)
+        self.assertEqual({path: path.stat().st_mtime_ns for path in before}, before)
 
 
 if __name__ == '__main__': unittest.main()

@@ -7,6 +7,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,11 @@ APP_HOME = Path.home() / '.config' / 'herdr-app-browser'
 RELEASE_FEED = 'https://releases.herdr.dev/app/latest.json'
 UPSTREAM = 'https://github.com/herdrdev/herdr-app.git'
 ENGINE_FEED = 'https://crates.io/api/v1/crates/cef'
+# Read-only release data for the Chromium freshness check (#705): the current stable
+# Chrome for Mac, and the Chrome Releases posts that say how many security fixes each carried.
+CHROME_STABLE_FEED = 'https://versionhistory.googleapis.com/v1/chrome/platforms/mac/channels/stable/versions?pageSize=1'
+CHROME_RELEASES_FEED = 'https://chromereleases.googleblog.com/feeds/posts/default/-/Stable%20updates?alt=json&max-results=150'
+UPDATE_COMMAND = 'herdr-browser-update check --force'
 LABEL = 'dev.james.herdr-browser-updater'
 FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs', 'src/mods.rs',
                  'src/browser.rs', 'src/browser', 'src/control.rs', 'src/terminal.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
@@ -467,6 +473,102 @@ def enable_watcher():
     print(f'Watching stable releases every six hours; staged updates are checked every 15 minutes.\n{agent}')
 
 
+def chrome_version(text):
+    """A dotted four-part Chrome version as a comparable tuple."""
+    parts = text.split('.')
+    if len(parts) != 4 or not all(part.isdigit() for part in parts):
+        raise ValueError(f'Not a Chrome version: {text!r}')
+    return tuple(map(int, parts))
+
+
+def embedded_chromium(app=APP):
+    """The Chromium version inside an app's CEF framework, read from the bundle only.
+
+    CEF's own Info.plist carries CEF's version and the Chromium branch; the full
+    Chromium version is in the framework binary as that branch's version string.
+    """
+    framework = app / 'Contents/Frameworks/Chromium Embedded Framework.framework'
+    try:
+        with (framework / 'Resources/Info.plist').open('rb') as source: info = plistlib.load(source)
+    except FileNotFoundError:
+        return None
+    branch = re.search(r'branch-heads/(\d+)', str(info.get('SCMRevision', '')))
+    if not branch: raise RuntimeError('The embedded Chromium branch is unreadable')
+    pattern = re.compile(rb'(?<![\d.])(\d{2,3})\.0\.' + branch[1].encode() + rb'\.(\d{1,4})(?![\d.])')
+    seen = {}
+    with (framework / 'Chromium Embedded Framework').open('rb') as binary:
+        tail = b''
+        while chunk := binary.read(8 << 20):
+            window = tail + chunk
+            for match in pattern.finditer(window):
+                # Matches wholly inside the carried-over tail were counted with the previous chunk.
+                if match.end() > len(tail):
+                    version = f'{match[1].decode()}.0.{branch[1]}.{match[2].decode()}'
+                    seen[version] = seen.get(version, 0) + 1
+            tail = window[-32:]
+    if not seen: raise RuntimeError('The embedded Chromium version is unreadable')
+    return max(seen, key=lambda version: (seen[version], chrome_version(version)))
+
+
+def fetch_json(url):
+    request = urllib.request.Request(url, headers={'User-Agent': 'herdr-browser-updater'})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+def security_releases(feed):
+    """Desktop stable updates as (versions, security fixes) from the Chrome Releases feed."""
+    releases = []
+    for entry in feed.get('feed', {}).get('entry', []):
+        title = entry.get('title', {}).get('$t', '')
+        if 'Desktop' not in title: continue
+        text = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(entry.get('content', {}).get('$t', ''))))
+        versions = set()
+        for base, suffixes in re.findall(r'(\d+\.\d+\.\d+\.\d+)((?:/\.\d+)*)', text):
+            versions.add(chrome_version(base))
+            prefix = base.rsplit('.', 1)[0]
+            for build in re.findall(r'/\.(\d+)', suffixes): versions.add(chrome_version(f'{prefix}.{build}'))
+        if not versions: continue
+        count = re.search(r'includes (\d+|an?|one) security fix', text)
+        fixes = 0 if not count else (int(count[1]) if count[1].isdigit() else 1)
+        releases.append((sorted(versions), fixes))
+    return releases
+
+
+def chromium_status(app=None, fetch=None):
+    """Read-only: how far the embedded Chromium is behind stable Chrome in security releases.
+
+    Never updates, builds or deletes anything; an unreadable feed is reported, not raised.
+    """
+    app, fetch = app or APP, fetch or fetch_json
+    try:
+        embedded = embedded_chromium(app)
+    except (OSError, RuntimeError, ValueError, plistlib.InvalidFileException) as error:
+        return {'installed': True, 'error': f'Embedded Chromium unreadable: {error}'}
+    if embedded is None: return {'installed': False}
+    result = {'installed': True, 'embedded': embedded, 'update': UPDATE_COMMAND}
+    try:
+        stable = fetch(CHROME_STABLE_FEED)['versions'][0]['version']
+        chrome_version(stable)
+        releases = security_releases(fetch(CHROME_RELEASES_FEED))
+    except Exception as error:
+        return {**result, 'error': f'Stable Chrome release data unavailable: {error}'}
+    current = chrome_version(embedded)
+    # A post's versions are one release built per platform: a build carrying any of them has its fixes.
+    newer = [(versions, fixes) for versions, fixes in releases if fixes and versions[0] > current]
+    oldest = min((versions[0] for versions, _ in releases), default=None)
+    result.update(
+        stable=stable,
+        upToDate=current >= chrome_version(stable),
+        securityReleasesBehind=len(newer),
+        securityFixesBehind=sum(fixes for _, fixes in newer),
+        # The feed reaches back only so far: an older build may be further behind than counted.
+        atLeast=oldest is None or current < oldest,
+        checked=stamp(),
+    )
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['snapshot', 'build', 'check', 'install', 'status', 'enable', 'rollback'])
@@ -475,6 +577,12 @@ def main():
     parser.add_argument('--engine', help='Pinned stable CEF crate version for a manual build')
     parser.add_argument('--force', action='store_true')
     args = parser.parse_args()
+    if args.command == 'status':
+        # Read-only, so it answers even while an update holds the lock.
+        state = read_json(LOCAL / 'state.json')
+        state['chromium'] = chromium_status()
+        print(json.dumps(state, indent=2))
+        return 0
     LOCAL.mkdir(parents=True, exist_ok=True)
     with (LOCAL / 'lock').open('w') as lock:
         try:
@@ -484,7 +592,6 @@ def main():
             return 0
         state = read_json(LOCAL / 'state.json')
         if args.command == 'snapshot': snapshot(args.base)
-        elif args.command == 'status': print(json.dumps(state, indent=2))
         elif args.command == 'enable': enable_watcher()
         elif args.command == 'rollback':
             previous = APP.with_name(APP.name + '.previous.noindex')
