@@ -98,6 +98,16 @@ herdr-browser-update install             # Promote a staged build after closing
 herdr-browser-update rollback            # Restore the previous bundle after closing
 ```
 
+`status` also reports, under `chromium`, the Chromium version embedded in the
+installed app, the current stable Chrome for Mac, and how many newer desktop
+stable releases carried security fixes (`securityReleasesBehind`,
+`securityFixesBehind`; `atLeast` when the build predates the release feed). It
+reads the bundle and two public feeds (Google's version history and Chrome
+Releases) and changes nothing: no build, install or cache removal, and it answers
+even while an update holds the lock. `clankie doctor` shows the same per machine.
+`check --force` can only move to a Chromium the `cef` crate already ships, so a
+stable release newer than the crate's stays reported until the crate catches up.
+
 The implementation is `personal/browser_update.py`. State, patch snapshot,
 candidate worktrees, logs and signing selection are in ignored
 `.local/browser-updater/`. Keep this checkout in place for the watcher and URL
