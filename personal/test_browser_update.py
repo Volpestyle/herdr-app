@@ -1,3 +1,5 @@
+import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -7,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import urllib.error
@@ -235,41 +238,137 @@ class BrowserBundleTests(unittest.TestCase):
                 'NSWebBrowserPublicKeyCredentialUsageDescription',
                 'NSCameraUsageDescription', 'NSMicrophoneUsageDescription'}
 
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bundle = self.root / 'Herdr Browser.app'
+        self.signed = []
+
+    def framework(self, parent, version, binary):
+        framework = parent / updater.CEF_FRAMEWORK
+        (framework / 'Resources').mkdir(parents=True)
+        with (framework / 'Resources/Info.plist').open('wb') as plist:
+            plistlib.dump({'CFBundleShortVersionString': version + '.0'}, plist)
+        (framework / 'Chromium Embedded Framework').write_bytes(binary)
+
+    def pin_archive(self, version='156.0.15'):
+        """A codec archive shaped like the real one, pinned for this test."""
+        build = self.root / 'codec-build'; build.mkdir()
+        self.framework(build, version, b'codec')
+        (build / updater.CEF_FRAMEWORK / 'Resources/._Info.plist').write_bytes(b'appledouble')  # as macOS tar writes it
+        archive = self.root / 'codecs.tar.bz2'
+        with tarfile.open(archive, 'w:bz2') as tar:
+            tar.add(build / updater.CEF_FRAMEWORK, arcname=updater.CEF_FRAMEWORK)
+        for name, value in [('CEF_CODEC_ARCHIVE', archive), ('CEF_CODEC_VERSION', '156.0.15'),
+                            ('CEF_CODEC_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())]:
+            pinned = patch.object(updater, name, value); pinned.start(); self.addCleanup(pinned.stop)
+        return archive
+
+    def package(self, cef='156.0.15'):
+        root = self.root; source = root / 'source'; binaries = root / 'bin'; sdk = root / 'sdk'
+        (source / 'assets/icons').mkdir(parents=True)
+        (source / 'assets/icons/Herdr.icns').write_bytes(b'icon')
+        (source / 'LICENSE').write_text('app license')
+        (source / 'THIRD-PARTY-NOTICES').write_text('dependency notices')
+        binaries.mkdir(); (binaries / 'herdr-app').write_bytes(b'app')
+        (binaries / 'herdr-browser-helper').write_bytes(b'helper')
+        self.framework(sdk, cef, b'stock')
+        local = root / 'state'; local.mkdir(); (local / 'signing_identity').write_text('test-identity')
+        def fake_run(args, **kwargs):
+            output = (str(sdk) + '\n').encode() if '--print-cef-path' in args else b'[]'
+            if 'commands' in args:
+                output = json.dumps([{'name': name} for name in ['browser.open','browser.navigate','browser.inspect']]).encode()
+            if '--sign' in args: self.signed.append(args)
+            return subprocess.CompletedProcess(args, 0, stdout=output)
+        with patch.object(updater, 'LOCAL', local), patch.object(updater, 'run', side_effect=fake_run):
+            return updater.package(binaries / 'herdr-app', self.bundle, '0.1.9', source, 'tested-patch')
+
+    def packaged_binary(self):
+        return (self.bundle / 'Contents/Frameworks' / updater.CEF_FRAMEWORK / 'Chromium Embedded Framework').read_bytes()
+
+    def test_the_pinned_cef_gets_the_codec_framework(self):
+        self.pin_archive()
+        self.assertEqual(self.package(), {'h264': True, 'cef': '156.0.15', 'sha256': updater.CEF_CODEC_SHA256})
+        self.assertEqual(self.packaged_binary(), b'codec')
+        self.assertEqual(list((self.bundle / 'Contents/Frameworks').rglob('._*')), [])
+        self.assertEqual(len(self.signed), 1)
+
+    def test_a_changed_codec_archive_stops_the_build_before_signing(self):
+        archive = self.pin_archive()
+        archive.write_bytes(archive.read_bytes() + b'tampered')
+        with self.assertRaisesRegex(RuntimeError, 'is not the pinned'): self.package()
+        self.assertEqual(self.signed, [])
+
+    def test_a_missing_codec_archive_stops_the_build_before_signing(self):
+        self.pin_archive().unlink()
+        with self.assertRaisesRegex(RuntimeError, 'Missing the CEF 156.0.15 codec framework'): self.package()
+        self.assertEqual(self.signed, [])
+
+    def test_an_archive_of_another_cef_is_refused(self):
+        self.pin_archive(version='156.0.14')
+        with self.assertRaisesRegex(RuntimeError, 'does not hold CEF 156.0.15'): self.package()
+        self.assertEqual(self.signed, [])
+
+    def test_a_moved_cef_falls_back_to_stock_and_warns(self):
+        self.pin_archive().unlink()  # the fallback must not need the archive at all
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors): codecs = self.package(cef='157.0.2')
+        self.assertEqual(self.packaged_binary(), b'stock')
+        self.assertEqual((codecs['h264'], codecs['cef']), (False, '157.0.2'))
+        self.assertIn('H.264/AAC video will not play', codecs['warning'])
+        self.assertIn('WARNING: CEF 157.0.2 has no codec build', errors.getvalue())
+        self.assertEqual(len(self.signed), 1)
+
+    def build_candidate(self, codecs):
+        """The watcher's path: build output is redirected to a log, so the warning has to escape it."""
+        local = self.root / 'local'; local.mkdir()
+        (local / 'feature.patch').write_text('patch')
+        state, announced = {}, []
+        fake = subprocess.CompletedProcess([], 0, stdout=b'/nonexistent\n')
+        with patch.object(updater, 'LOCAL', local), patch.object(updater, 'run', return_value=fake), \
+                patch.object(updater, 'git', return_value='commit'), patch.object(updater, 'pin_engine'), \
+                patch.object(updater, 'ensure_zig', return_value='zig'), patch.object(updater, 'build_step'), \
+                patch.object(updater, 'package', return_value=codecs), \
+                patch.object(updater, 'announce_codec_loss', side_effect=announced.append):
+            updater.build_candidate('v0.1.12', state, engine='157.0.0+157.0.2')
+        return state, announced
+
+    def test_an_unattended_stock_build_is_announced_and_stays_in_status(self):
+        state, announced = self.build_candidate({'h264': False, 'cef': '157.0.2', 'warning': 'no H.264'})
+        self.assertEqual(state['status'], 'staged')
+        self.assertEqual(announced, ['no H.264'])
+        self.assertEqual(updater.codec_warning(state), 'no H.264')
+        state['installed'], state['pending'] = state['pending'], None
+        self.assertEqual(updater.codec_warning(state), 'no H.264')
+
+    def test_a_codec_build_is_not_announced(self):
+        state, announced = self.build_candidate({'h264': True, 'cef': '156.0.15', 'sha256': 'pinned'})
+        self.assertEqual(announced, [])
+        self.assertIsNone(updater.codec_warning(state))
+        self.assertIsNone(updater.codec_warning({'installed': {'tag': 'v0.1.12'}}))  # built before codecs were recorded
+
     def test_packaged_app_and_helpers_declare_browser_privacy_purposes(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp); source = root / 'source'; binaries = root / 'bin'; sdk = root / 'sdk'
-            (source / 'assets/icons').mkdir(parents=True)
-            (source / 'assets/icons/Herdr.icns').write_bytes(b'icon')
-            (source / 'LICENSE').write_text('app license')
-            (source / 'THIRD-PARTY-NOTICES').write_text('dependency notices')
-            binaries.mkdir(); (binaries / 'herdr-app').write_bytes(b'app')
-            (binaries / 'herdr-browser-helper').write_bytes(b'helper')
-            (sdk / 'Chromium Embedded Framework.framework').mkdir(parents=True)
-            local = root / 'state'; local.mkdir(); (local / 'signing_identity').write_text('test-identity')
-            def fake_run(args, **kwargs):
-                output = (str(sdk) + '\n').encode() if '--print-cef-path' in args else b'[]'
-                if 'commands' in args:
-                    output = json.dumps([{'name': name} for name in ['browser.open','browser.navigate','browser.inspect']]).encode()
-                return subprocess.CompletedProcess(args, 0, stdout=output)
-            bundle = root / 'Herdr Browser.app'
-            with patch.object(updater, 'LOCAL', local), patch.object(updater, 'run', side_effect=fake_run):
-                updater.package(binaries / 'herdr-app', bundle, '0.1.9', source, 'tested-patch')
-            plists = [bundle / 'Contents/Info.plist', *sorted((bundle / 'Contents/Frameworks').glob('*.app/Contents/Info.plist'))]
-            self.assertEqual(len(plists), 6)
-            self.assertEqual((bundle / 'Contents/Resources/LICENSE').read_text(), 'app license')
-            self.assertEqual((bundle / 'Contents/Resources/THIRD-PARTY-NOTICES').read_text(), 'dependency notices')
-            for path in plists:
-                with path.open('rb') as file: info = plistlib.load(file)
-                self.assertTrue(self.required <= info.keys(), path)
-                self.assertTrue(all(isinstance(info[key], str) and info[key].strip() for key in self.required), path)
-            main = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
-            self.assertEqual(main['LSEnvironment'], {'HERDR_APP_HOME': '~/.config/herdr-app-browser'})
-            # A damaged artifact must be refused before it reaches installation.
-            with plists[1].open('rb') as file: info = plistlib.load(file)
-            del info['NSBluetoothAlwaysUsageDescription']
-            with plists[1].open('wb') as file: plistlib.dump(info, file)
-            with self.assertRaisesRegex(RuntimeError, 'NSBluetoothAlwaysUsageDescription'):
-                updater.validate_browser_bundle(bundle)
+        self.pin_archive()
+        self.package()
+        bundle = self.bundle
+        bundle = self.bundle
+        plists = [bundle / 'Contents/Info.plist', *sorted((bundle / 'Contents/Frameworks').glob('*.app/Contents/Info.plist'))]
+        self.assertEqual(len(plists), 6)
+        self.assertEqual((bundle / 'Contents/Resources/LICENSE').read_text(), 'app license')
+        self.assertEqual((bundle / 'Contents/Resources/THIRD-PARTY-NOTICES').read_text(), 'dependency notices')
+        for path in plists:
+            with path.open('rb') as file: info = plistlib.load(file)
+            self.assertTrue(self.required <= info.keys(), path)
+            self.assertTrue(all(isinstance(info[key], str) and info[key].strip() for key in self.required), path)
+        main = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
+        self.assertEqual(main['LSEnvironment'], {'HERDR_APP_HOME': '~/.config/herdr-app-browser'})
+        # A damaged artifact must be refused before it reaches installation.
+        with plists[1].open('rb') as file: info = plistlib.load(file)
+        del info['NSBluetoothAlwaysUsageDescription']
+        with plists[1].open('wb') as file: plistlib.dump(info, file)
+        with self.assertRaisesRegex(RuntimeError, 'NSBluetoothAlwaysUsageDescription'):
+            updater.validate_browser_bundle(bundle)
 
 
 
