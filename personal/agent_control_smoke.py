@@ -111,7 +111,14 @@ def main():
             assert app.poll() is None, f'App exited; {work}/app.log'
             assert time.monotonic() < deadline, f'No socket; {work}/app.log'
             time.sleep(.1)
-        space = command('space.new', name='Agent QA', folder=str(work), tab='Scratch terminal')
+        while True:
+            try:
+                space = command('space.new', name='Agent QA', folder=str(work), tab='Scratch terminal')
+                break
+            except AssertionError as error:
+                # The scratch core may still be connecting.
+                if 'unavailable' not in str(error) or time.monotonic() > deadline: raise
+                time.sleep(.5)
         url = f'http://127.0.0.1:{server.server_port}/'
         # Unknown callers must never target the person's focused page.
         command('browser.read', caller='unmapped', expect_error='Pass pane explicitly')

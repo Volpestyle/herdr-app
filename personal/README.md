@@ -60,7 +60,7 @@ updater every 15 minutes. At most every six hours it checks:
 It creates an isolated detached worktree, checks and applies the saved browser
 patch, pins the selected stable CEF version, builds the optimized app/helpers,
 and runs app unit tests locally. It regenerates dependency notices, packages
-Chromium with the app, signs and verifies the complete bundle, and checks its
+Chromium with the app ([with H.264/AAC](#h264aac) while CEF matches the pin), signs and verifies the complete bundle, and checks its
 browser commands before staging.
 The main app and every Chromium helper carry the macOS Bluetooth, passkey,
 camera and microphone usage declarations; packaging fails if any is missing.
@@ -68,6 +68,32 @@ Compiles have a 30-minute limit; app tests run serially with a two-minute
 limit. A timeout stops only that updater-owned build process tree. This keeps
 an occasional filesystem-watcher test stall from hanging the watcher.
 Update checks use public release feeds; builds run locally.
+
+### H.264/AAC
+
+Stock CEF has no proprietary codecs, so MP4/H.264 video does not play in it. The
+updater pins a framework rebuilt locally with them, by CEF version and sha256
+(`CEF_CODEC_*` in `browser_update.py`), at
+`~/cef-build/cef-<version>-codecs-framework.tar.bz2`. That archive never leaves
+this Mac: no build fetches it, and it is not uploaded or hosted.
+
+Packaging reads the CEF version of the stock framework the build linked against:
+
+- **It matches the pin:** the archive's hash is checked and its framework replaces
+  stock in the bundle. A missing or changed archive fails the build, so the
+  working app stays and H.264 is never dropped silently.
+- **It differs:** a Chromium security update outranks H.264, so the build ships
+  stock CEF and video stops playing until the framework is rebuilt. The updater
+  warns in its log and with a macOS notification when it stages that build, and
+  `herdr-browser-update status` reports `codec_warning` until a codec build
+  replaces it.
+
+To restore H.264 after CEF moves, rebuild the framework for the new CEF, update
+`CEF_CODEC_VERSION` and `CEF_CODEC_SHA256`, then run `herdr-browser-update check
+--force`. The forced run is needed there and on the first install of this pin: an
+unchanged Herdr version, patch and CEF is otherwise already up to date. Another
+Mac has no archive, so its builds fail at the pinned CEF; it takes the signed app
+from this Mac instead ([moving to another Mac](ANOTHER-MAC.md)).
 
 The staged build installs once Herdr Browser closes. Updates retain the previous
 bundle for rollback and never quit the working app themselves. Patch conflicts,

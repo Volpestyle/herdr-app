@@ -8,6 +8,7 @@ import datetime as dt
 import fcntl
 import hashlib
 import html
+import io
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,12 @@ FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs'
                  'defaults/mods/new-menu', 'defaults/mods/native-browser',
                  'defaults/keys.macos.json',
                  'licenses/CEF.txt', 'licenses/inventory.json']
+# Stock CEF has no H.264/AAC. This archive is the framework rebuilt locally with
+# proprietary codecs, for this Mac only: nothing fetches, uploads or hosts it.
+CEF_FRAMEWORK = 'Chromium Embedded Framework.framework'
+CEF_CODEC_VERSION = '156.0.15'
+CEF_CODEC_SHA256 = '5738067a62c992721c888a3340d5802914f2f23ffdd6d2328573d4f5e06c660e'
+CEF_CODEC_ARCHIVE = Path.home() / 'cef-build' / f'cef-{CEF_CODEC_VERSION}-codecs-framework.tar.bz2'
 
 
 def run(args, *, cwd=ROOT, env=None, capture=False, check=True):
@@ -234,6 +241,53 @@ def validate_browser_bundle(bundle):
                 raise RuntimeError(f'{path}: missing browser privacy declaration {key}')
 
 
+def framework_cef_version(framework):
+    with (framework / 'Resources/Info.plist').open('rb') as source: info = plistlib.load(source)
+    return '.'.join(info['CFBundleShortVersionString'].split('.')[:3])
+
+
+def install_cef_framework(stock, frameworks):
+    """Put the pinned codec framework in the bundle, or stock when CEF has moved past it.
+
+    A codec framework only fits the CEF it was built from, and a Chromium security
+    update outranks H.264, so a different CEF ships stock and says so. At the pinned
+    version a missing or changed archive is an error: H.264 never disappears silently.
+    """
+    version = framework_cef_version(stock)
+    if version != CEF_CODEC_VERSION:
+        warning = (f'CEF {version} has no codec build (pinned {CEF_CODEC_VERSION}): this build uses stock '
+                   'CEF, so H.264/AAC video will not play until the codec framework is rebuilt and repinned.')
+        print(f'WARNING: {warning}', file=sys.stderr)
+        shutil.copytree(stock, frameworks / stock.name, symlinks=True)
+        return {'h264': False, 'cef': version, 'warning': warning}
+    try:
+        archive = CEF_CODEC_ARCHIVE.read_bytes()
+    except FileNotFoundError:
+        raise RuntimeError(f'Missing the CEF {version} codec framework: {CEF_CODEC_ARCHIVE}') from None
+    digest = hashlib.sha256(archive).hexdigest()
+    if digest != CEF_CODEC_SHA256:
+        raise RuntimeError(f'{CEF_CODEC_ARCHIVE}: sha256 {digest} is not the pinned {CEF_CODEC_SHA256}')
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:bz2') as tar:
+        # macOS tar stores xattrs as AppleDouble ._ entries; on disk they fail codesign --deep.
+        tar.extractall(frameworks, members=[m for m in tar if not Path(m.name).name.startswith('._')])
+    if framework_cef_version(frameworks / CEF_FRAMEWORK) != version:
+        raise RuntimeError(f'{CEF_CODEC_ARCHIVE} does not hold CEF {version}')
+    return {'h264': True, 'cef': version, 'sha256': digest}
+
+
+def announce_codec_loss(warning):
+    """Reach the owner from the background watcher, whose build output only goes to a log."""
+    print(f'herdr-browser-update: WARNING: {warning}', file=sys.stderr)
+    run(['/usr/bin/osascript', '-e', f'display notification {json.dumps(warning)} with title "Herdr Browser update"'],
+        capture=True, check=False)
+
+
+def codec_warning(state):
+    """The H.264 loss, if any, of the build staged or running now."""
+    builds = [state.get('pending'), state.get('installed')]
+    return next((build['codecs']['warning'] for build in builds if build and 'warning' in build.get('codecs', {})), None)
+
+
 def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.james.herdr-browser"):
     macos = destination / 'Contents/MacOS'
     resources = destination / 'Contents/Resources'
@@ -251,9 +305,9 @@ def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.
     if credits.exists(): shutil.copy2(credits, resources / 'Chromium-Credits.html')
     frameworks = destination / 'Contents/Frameworks'
     frameworks.mkdir()
-    framework = cef_dir / 'Chromium Embedded Framework.framework'
-    if not framework.is_dir(): framework = cef_dir / 'Release/Chromium Embedded Framework.framework'
-    shutil.copytree(framework, frameworks / framework.name, symlinks=True)
+    framework = cef_dir / CEF_FRAMEWORK
+    if not framework.is_dir(): framework = cef_dir / 'Release' / CEF_FRAMEWORK
+    codecs = install_cef_framework(framework, frameworks)
     for role in ['', ' (GPU)', ' (Renderer)', ' (Plugin)', ' (Alerts)']:
         name = 'HerdrBrowser Helper' + role
         contents = frameworks / f'{name}.app/Contents'
@@ -291,6 +345,7 @@ def package(binary, destination, version, source, patch_hash, *, bundle_id="dev.
     commands = {item['name'] for item in json.loads(listing)}
     if not {'browser.open', 'browser.navigate', 'browser.inspect'} <= commands:
         raise RuntimeError('Candidate is missing the native browser commands')
+    return codecs
 
 
 def build_candidate(tag, state, *, force=False, engine=None):
@@ -354,14 +409,15 @@ def build_candidate(tag, state, *, force=False, engine=None):
                 build_step(['bun', 'scripts/notices.ts'], cwd=tree, env=environment,
                            output=child_log, timeout=120)
             candidate = build_root / 'Herdr Browser.app'
-            package(ROOT / 'target/release/herdr-app', candidate, tag[1:], tree, patch_hash)
+            codecs = package(ROOT / 'target/release/herdr-app', candidate, tag[1:], tree, patch_hash)
         state.update(status='staged', pending={'bundle': str(candidate), 'tag': tag,
-                     'commit': commit, 'patch': patch_hash, 'engine': engine, 'built': stamp()}, failed_key=None, error=None)
+                     'commit': commit, 'patch': patch_hash, 'engine': engine, 'codecs': codecs, 'built': stamp()}, failed_key=None, error=None)
     except Exception as error:
         state.update(status='failed', failed_key=key, error=str(error))
         write_json(LOCAL / 'state.json', state)
         raise
     write_json(LOCAL / 'state.json', state)
+    if 'warning' in codecs: announce_codec_loss(codecs['warning'])
 
 
 def app_running(app=APP):
@@ -581,6 +637,7 @@ def main():
         # Read-only, so it answers even while an update holds the lock.
         state = read_json(LOCAL / 'state.json')
         state['chromium'] = chromium_status()
+        state['codec_warning'] = codec_warning(state)
         print(json.dumps(state, indent=2))
         return 0
     LOCAL.mkdir(parents=True, exist_ok=True)
