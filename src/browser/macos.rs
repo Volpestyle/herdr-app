@@ -431,7 +431,13 @@ impl Host {
         let event_window = native_window.clone();
         let block = block2::RcBlock::new(move |event: NonNull<NSEvent>| {
             let e = unsafe { event.as_ref() };
-            if !event_allowed.get() || e.windowNumber() != event_window.windowNumber() {
+            if e.windowNumber() != event_window.windowNumber() {
+                return event.as_ptr();
+            }
+            if !event_allowed.get() {
+                if e.r#type() == objc2_app_kit::NSEventType::KeyDown && focused(&event_container, &event_window) {
+                    event_window.makeFirstResponder(Some(&event_parent));
+                }
                 return event.as_ptr();
             }
             if e.r#type() == objc2_app_kit::NSEventType::LeftMouseDown {
@@ -541,11 +547,11 @@ impl Host {
         if !allowed {
             self.focus_gate.store(false, Ordering::Relaxed);
         }
+        if !allowed && self.is_native_focused() {
+            self.focus_pending.set(true);
+            self.focus_parent();
+        }
         if !allowed && self.shown.replace(false) {
-            if self.is_native_focused() {
-                self.focus_pending.set(true);
-                self.focus_parent();
-            }
             self.container.setHidden(true);
         }
     }
