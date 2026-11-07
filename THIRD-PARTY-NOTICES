@@ -2,8 +2,8 @@ Herdr third-party notices
 =========================
 Regenerate with just notices. See licenses/README.md.
 
-Input-SHA256: ad4ea88b04c1faa812409b8a02343e3ded37e9464554349bf22e83b4f6ca4e9d Cargo.lock
-Input-SHA256: 13e427acfae5fb3ab2361860d574dd619946f78d8f7f97420a4f4bcaf4378731 Cargo.toml
+Input-SHA256: b52a0d84f7f6c25d7899aab99d97302269c330888b17ecd880ef8ff2bb0e859c Cargo.lock
+Input-SHA256: 9dc464391c5f4223c27b52c52711ff0ff863a13f7510e7cd701530aa904a6463 Cargo.toml
 Input-SHA256: c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4 LICENSE
 Input-SHA256: e58cb0de2dde300bcda769ca993fde2737f42c0274082f038621ab22975a49e2 about.toml
 Input-SHA256: 84a7a98c82140fb12c37fe42b93805baa16024cb3e5acc599b7ffe612c55d847 assets/fonts/LICENSE-SymbolsNerdFont.txt
@@ -12034,8 +12034,8 @@ Apache License 2.0 (Apache-2.0)
   android_system_properties 0.1.6 — https://github.com/nical/android_system_properties
   anyhow 1.0.104 — https://github.com/dtolnay/anyhow
   async-trait 0.1.92 — https://github.com/dtolnay/async-trait
-  cef-dll-sys 156.3.0+156.0.15 — https://github.com/tauri-apps/cef-rs
-  cef 156.3.0+156.0.15 — https://github.com/tauri-apps/cef-rs
+  cef-dll-sys 156.3.1+156.0.15 — https://github.com/tauri-apps/cef-rs
+  cef 156.3.1+156.0.15 — https://github.com/tauri-apps/cef-rs
   cranelift-bitset 0.116.1 — https://github.com/bytecodealliance/wasmtime
   cranelift-isle 0.116.1 — https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle
   crc32c 0.6.8 — https://github.com/zowens/crc32c
