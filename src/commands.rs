@@ -131,11 +131,8 @@ pub fn find(name: &str) -> Option<&'static Command> {
 }
 
 /// A key's `name:value` shorthand: the value fills the first argument (a
-/// number fills `index` when there is one; a JSON object gives every argument).
+/// number fills `index` when there is one).
 pub fn shorthand(c: &Command, value: &str) -> Value {
-    if let Ok(args @ Value::Object(_)) = serde_json::from_str(value) {
-        return args;
-    }
     let index = value.parse::<u64>().ok().filter(|_| c.args.iter().any(|a| a.name == "index"));
     match (index, c.args.first()) {
         (Some(i), _) => json!({ "index": i }),
@@ -242,7 +239,6 @@ mod tests {
         assert_eq!(names.len(), COMMANDS.len());
         assert_eq!(shorthand(find("tab.select").unwrap(), "3"), json!({ "index": 3 }));
         assert_eq!(shorthand(find("pane.split").unwrap(), "right"), json!({ "direction": "right" }));
-        assert_eq!(shorthand(find("browser.split").unwrap(), r#"{"url":"https://linear.app"}"#), json!({ "url": "https://linear.app" }));
         let move_ = find("space.move").unwrap();
         assert_eq!(missing(move_, &json!({ "id": " ", "index": 1 })), Some("id"));
         assert_eq!(missing(move_, &json!({ "id": "sp1", "index": 1 })), None);
