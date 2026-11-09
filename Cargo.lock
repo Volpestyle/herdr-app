@@ -3819,6 +3819,7 @@ dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
  "cef",
+ "cef-dll-sys",
  "dispatch2",
  "fancy-regex 0.19.2",
  "ghostty-sys",

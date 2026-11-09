@@ -94,10 +94,43 @@ wrap_life_span_handler! {
             }
             1
         }
-        fn on_before_popup(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _id: i32, url: Option<&CefString>, _name: Option<&CefString>, _disposition: WindowOpenDisposition, _gesture: i32, _features: Option<&PopupFeatures>, _window: Option<&mut WindowInfo>, _client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>, _extra: Option<&mut Option<DictionaryValue>>, _no_js: Option<&mut i32>) -> i32 {
-            if let Some(url) = url { if web_url(&url.to_string()) { let _ = self.tx.try_send(Event::Open(url.to_string())); } }
+        fn on_before_popup(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _id: i32, url: Option<&CefString>, _name: Option<&CefString>, disposition: WindowOpenDisposition, _gesture: i32, _features: Option<&PopupFeatures>, _window: Option<&mut WindowInfo>, client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>, _extra: Option<&mut Option<DictionaryValue>>, _no_js: Option<&mut i32>) -> i32 {
+            let url = url.map(CefString::to_string).unwrap_or_default();
+            // A scripted window.open popup (OAuth sign-in) needs a real window
+            // that keeps window.opener; cancelling it makes the page report
+            // "popups blocked". Links that ask for a new tab become Herdr tabs.
+            if disposition == WindowOpenDisposition::NEW_POPUP && (url.is_empty() || web_url(&url)) {
+                if let Some(client) = client { *client = Some(PopupClient::new()); }
+                return 0;
+            }
+            if web_url(&url) { let _ = self.tx.try_send(Event::Open(url)); }
             1
         }
+    }
+}
+wrap_life_span_handler! {
+    // Its own top-level Chromium window: CEF closes it, Herdr only tracks it.
+    struct PopupLife;
+    impl LifeSpanHandler {
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            runtime::ACTIVE.fetch_add(1, Ordering::Relaxed);
+            if let Some(browser) = browser { runtime::add_popup(browser.clone()); }
+        }
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            if let Some(browser) = browser { runtime::remove_popup(browser); }
+            runtime::ACTIVE.fetch_sub(1, Ordering::Relaxed);
+        }
+        fn on_before_popup(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _id: i32, url: Option<&CefString>, _name: Option<&CefString>, disposition: WindowOpenDisposition, _gesture: i32, _features: Option<&PopupFeatures>, _window: Option<&mut WindowInfo>, _client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>, _extra: Option<&mut Option<DictionaryValue>>, _no_js: Option<&mut i32>) -> i32 {
+            let url = url.map(CefString::to_string).unwrap_or_default();
+            (disposition != WindowOpenDisposition::NEW_POPUP || !(url.is_empty() || web_url(&url))) as i32
+        }
+    }
+}
+wrap_client! {
+    struct PopupClient;
+    impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new()) }
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(PopupLife::new()) }
     }
 }
 wrap_focus_handler! {
@@ -277,7 +310,7 @@ fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
         ("l", false) => Some("browser.focus_url"),
         ("r", false) => Some("browser.reload"),
         ("b", false) => Some("layout.toggle:sidebar"),
-        ("t", false) => Some("browser.open"),
+        ("t", false) => Some("tab.new"),
         ("w", false) => Some("tab.close"),
         ("p", true) => Some("app.palette"),
         (",", false) => Some("app.settings"),
@@ -634,6 +667,11 @@ mod tests {
     fn browser_and_sidebar_shortcuts_match_the_global_keymap() {
         let keys: serde_json::Value =
             serde_json::from_str(include_str!("../../defaults/keys.macos.json")).unwrap();
+        assert_eq!(shortcut("t", false, false), Some("tab.new"));
+        assert_eq!(
+            shortcut("t", false, false),
+            keys["global"]["cmd-t"].as_str()
+        );
         assert_eq!(
             shortcut("b", false, false),
             keys["global"]["cmd-b"].as_str()

@@ -26,6 +26,7 @@ thread_local! {
     static READY: Cell<bool> = const { Cell::new(false) };
     static SEND_EVENT: Cell<bool> = const { Cell::new(false) };
     static BROWSERS: RefCell<Vec<BrowserEntry>> = const { RefCell::new(Vec::new()) };
+    static POPUPS: RefCell<Vec<Browser>> = const { RefCell::new(Vec::new()) };
     static PUMP: RefCell<Option<Arc<Pump>>> = const { RefCell::new(None) };
 }
 pub static PENDING: AtomicUsize = AtomicUsize::new(0);
@@ -37,6 +38,15 @@ pub fn ready() -> bool {
 }
 pub fn register(browser: &BrowserCell, detach: impl Fn() + 'static) {
     BROWSERS.with_borrow_mut(|items| items.push((Rc::downgrade(browser), Box::new(detach))));
+}
+/// Page popups (OAuth sign-in windows) own their top-level window; keep them
+/// so shutdown can close them before CEF stops.
+pub fn add_popup(browser: Browser) {
+    POPUPS.with_borrow_mut(|items| items.push(browser));
+}
+pub fn remove_popup(browser: &Browser) {
+    let id = browser.identifier();
+    POPUPS.with_borrow_mut(|items| items.retain(|b| b.identifier() != id));
 }
 
 struct Pump {
@@ -304,6 +314,13 @@ pub fn stop() {
         detach();
         if let Some(cell) = browser.upgrade() {
             close(&cell);
+        }
+    }
+    for popup in POPUPS.with_borrow_mut(std::mem::take) {
+        if popup.is_valid() != 0 {
+            if let Some(host) = popup.host() {
+                host.close_browser(1);
+            }
         }
     }
     let deadline = Instant::now() + Duration::from_secs(3);

@@ -31,6 +31,7 @@ environment variables; start a fresh agent terminal to receive them. Tools
 that honor `BROWSER` use the opener; tools that explicitly launch another
 browser need to follow the agent instructions or be configured separately.
 
+Cmd+T opens a terminal tab even while a webpage has focus.
 Cmd+Option+B opens a browser tab; Cmd+B toggles the sidebar. Cmd+L selects the
 address bar, Cmd+R reloads, and Cmd+Shift+[ / ] cycle all Herdr
 tabs while a webpage owns keyboard focus. Native copy/paste/select-all and
