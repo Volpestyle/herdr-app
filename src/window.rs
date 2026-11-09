@@ -1485,6 +1485,15 @@ impl AppWindow {
         self.synced_model_pane = model_pane;
         self.focused_pane = focused.clone();
         let no_dialog = !self.overlays.iter().any(|o| o.kind.modal_keys());
+        // A page keeps AppKit's first responder until told otherwise: when focus
+        // moves to another pane, take it back or typing still lands in the page.
+        if pane_changed {
+            for (slot, copy) in &self.copies {
+                if focused.as_deref() != Some(slot.as_str()) && let Some(browser) = &copy.browser {
+                    browser.read(cx).release_focus();
+                }
+            }
+        }
         // The tab shown again (`layout.select` back from another stack child): its
         // focused pane gets the keyboard, which went to the window while it was hidden.
         let tab_shown = self.shows_tab();

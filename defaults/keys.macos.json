@@ -37,6 +37,7 @@
     "cmd-b": "layout.toggle:sidebar",
     "cmd-alt-b": "browser.open",
     "cmd-ctrl-b": "browser.split:right",
+    "cmd-shift-b": "browser.split:right",
     "cmd-=": "app.zoom_in",
     "cmd-+": "app.zoom_in",
     "cmd--": "app.zoom_out",

@@ -310,6 +310,7 @@ fn shortcut(key: &str, shift: bool, option: bool) -> Option<&'static str> {
         ("l", false) => Some("browser.focus_url"),
         ("r", false) => Some("browser.reload"),
         ("b", false) => Some("layout.toggle:sidebar"),
+        ("b", true) => Some("browser.split:right"),
         ("t", false) => Some("tab.new"),
         ("w", false) => Some("tab.close"),
         ("p", true) => Some("app.palette"),
@@ -675,6 +676,10 @@ mod tests {
         assert_eq!(
             shortcut("b", false, false),
             keys["global"]["cmd-b"].as_str()
+        );
+        assert_eq!(
+            shortcut("b", true, false),
+            keys["global"]["cmd-shift-b"].as_str()
         );
         assert_eq!(
             shortcut("b", false, true),

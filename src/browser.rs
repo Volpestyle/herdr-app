@@ -241,6 +241,17 @@ impl Browser {
         }
     }
 
+    /// Hand AppKit's keyboard back to the window if this page holds it, so a
+    /// GPUI pane focused elsewhere actually receives typing.
+    pub fn release_focus(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(host) = &self.host {
+            if host.is_focused() {
+                host.focus_parent();
+            }
+        }
+    }
+
     fn focus_url(&self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
         if let Some(host) = &self.host {
