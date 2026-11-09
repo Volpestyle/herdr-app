@@ -644,7 +644,7 @@ impl Control {
     /// Checks the site again right before each value, so a redirect never receives it.
     async fn fill(&self, node: i64, sites: &[String], value: &str, ex: &BackgroundExecutor) -> Result<(), String> {
         let host = self.page_host(ex).await?;
-        if !sites.iter().any(|site| host == *site || host.ends_with(&format!(".{site}"))) {
+        if !listed(sites, &host) {
             return Err(format!("The 1Password item does not list {host}; refusing to fill"));
         }
         if value.is_empty() {
@@ -845,18 +845,8 @@ impl Control {
                 Ok(json!({"ok":true}))
             }
             "browser.signin" => {
-                let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
                 self.page_host(ex).await?;
-                let login = match (text("item"), text("env_file")) {
-                    (Some(item), None) if !item.starts_with('-') => ex.spawn(async move { one_password(&item) }).await?,
-                    (None, Some(file)) => {
-                        let user = text("user_key").ok_or("env_file needs user_key")?;
-                        let password = text("password_key").ok_or("env_file needs password_key")?;
-                        let site = text("site").ok_or("env_file needs site, the host it may fill (e.g. localhost)")?;
-                        env_login(&file, &user, &password, &site)?
-                    }
-                    _ => return Err("Pass exactly one of item (1Password) or env_file".into()),
-                };
+                let login = login(args, ex).await?;
                 let mut filled = Vec::new();
                 if let Some(field) = self.login_field(false, ex).await? {
                     self.fill(field, &login.urls, &login.username, ex).await?;
@@ -1047,10 +1037,29 @@ const RECORD_CURSOR: &str = r#"(() => {
   };
 })()"#;
 
-struct Login {
-    username: String,
-    password: String,
-    urls: Vec<String>,
+pub(super) struct Login {
+    pub(super) username: String,
+    pub(super) password: String,
+    pub(super) urls: Vec<String>,
+}
+
+pub(super) fn listed(sites: &[String], host: &str) -> bool {
+    sites.iter().any(|site| host == *site || host.ends_with(&format!(".{site}")))
+}
+
+/// browser.signin's credentials: a 1Password item, or a dotenv file's test login.
+pub(super) async fn login(args: &Value, ex: &BackgroundExecutor) -> Result<Login, String> {
+    let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    match (text("item"), text("env_file")) {
+        (Some(item), None) if !item.starts_with('-') => ex.spawn(async move { one_password(&item) }).await,
+        (None, Some(file)) => {
+            let user = text("user_key").ok_or("env_file needs user_key")?;
+            let password = text("password_key").ok_or("env_file needs password_key")?;
+            let site = text("site").ok_or("env_file needs site, the host it may fill (e.g. localhost)")?;
+            env_login(&file, &user, &password, &site)
+        }
+        _ => Err("Pass exactly one of item (1Password) or env_file".into()),
+    }
 }
 
 /// `op` asks the person to approve (Touch ID) on first use; its output never reaches a reply or log.

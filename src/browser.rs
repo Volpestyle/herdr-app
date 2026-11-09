@@ -47,6 +47,25 @@ pub enum Event {
     Focused,
     Notice(String),
     Error(String),
+    Auth(Auth),
+}
+
+/// A page's HTTP sign-in challenge, answered from the pane. Dropping it cancels.
+pub struct Auth {
+    host: String,
+    reply: Option<Box<dyn FnOnce(Option<(String, String)>)>>,
+}
+impl Drop for Auth {
+    fn drop(&mut self) {
+        if let Some(reply) = self.reply.take() {
+            reply(None);
+        }
+    }
+}
+impl std::fmt::Debug for Auth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Auth({})", self.host)
+    }
 }
 
 /// Normalize address-bar input, while keeping non-web schemes out of navigation.
@@ -90,11 +109,14 @@ pub struct Browser {
     loading: bool,
     error: Option<String>,
     notice: Option<String>,
+    auth: Option<Auth>,
+    credentials: [Entity<InputState>; 2],
     allowed: Rc<Cell<bool>>,
     #[cfg(target_os = "macos")]
     host: Option<Rc<macos::Host>>,
     recording: Cell<bool>,
     _input: Subscription,
+    _credentials: [Subscription; 2],
     _events: Task<()>,
 }
 
@@ -116,6 +138,17 @@ impl Browser {
                 let _ = this.navigate(&text, window, cx);
                 this.focus_page();
             }
+        });
+        let credentials = [
+            cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
+            cx.new(|cx| InputState::new(window, cx).placeholder("Password").masked(true)),
+        ];
+        let submit = credentials.each_ref().map(|input| {
+            cx.subscribe_in(input, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.sign_in(true, window, cx);
+                }
+            })
         });
         let profile = props
             .get("profile")
@@ -151,11 +184,14 @@ impl Browser {
             loading: true,
             error,
             notice: None,
+            auth: None,
+            credentials,
             recording: Cell::new(false),
             allowed,
             #[cfg(target_os = "macos")]
             host,
             _input: subscription,
+            _credentials: submit,
             _events: events,
         }
     }
@@ -165,6 +201,7 @@ impl Browser {
             Event::Ready => {}
             Event::Loading(url) => {
                 self.loading = true;
+                self.auth = None;
                 self.url = url;
                 if !self.input.read(cx).focus_handle(cx).is_focused(window) {
                     self.input
@@ -214,7 +251,47 @@ impl Browser {
                 self.loading = false;
                 self.error = Some(message);
             }
+            Event::Auth(auth) => {
+                self.loading = false;
+                self.error = None;
+                self.auth = Some(auth);
+                if self.is_focused() {
+                    self.release_focus();
+                    self.credentials[0].update(cx, |i, cx| i.focus(window, cx));
+                }
+            }
         }
+        cx.notify();
+    }
+
+    fn answer(&mut self, login: Option<(String, String)>) {
+        if let Some(reply) = self.auth.take().and_then(|mut auth| auth.reply.take()) {
+            reply(login);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn http_sign_in(&mut self, login: control::Login, cx: &mut Context<Self>) -> Result<Value, String> {
+        let host = self
+            .auth
+            .as_ref()
+            .map(|a| a.host.to_ascii_lowercase())
+            .ok_or("The page no longer asks for a sign-in")?;
+        if !control::listed(&login.urls, &host) {
+            return Err(format!("The credentials do not list {host}; refusing to sign in"));
+        }
+        self.answer(Some((login.username, login.password)));
+        cx.notify();
+        Ok(json!({"ok":true,"filled":["username","password"],"auth":host}))
+    }
+
+    fn sign_in(&mut self, submit: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let [user, password] = self.credentials.each_ref().map(|i| i.read(cx).value().to_string());
+        self.answer(submit.then_some((user, password)));
+        for input in &self.credentials {
+            input.update(cx, |i, cx| i.set_value("", window, cx));
+        }
+        self.focus_page();
         cx.notify();
     }
 
@@ -285,6 +362,7 @@ impl Browser {
         self.loading = true;
         self.error = None;
         self.notice = None;
+        self.auth = None;
         self.input
             .update(cx, |i, cx| i.set_value(url.clone(), window, cx));
         cx.notify();
@@ -292,7 +370,7 @@ impl Browser {
     }
 
     pub fn inspect(&self) -> Value {
-        let mut out = json!({"engine":"Chromium/CEF", "pane":self.pane, "profile":self.profile, "url":self.url, "title":self.title, "loading":self.loading, "page_error":self.error, "notice":self.notice, "visible":self.allowed.get()});
+        let mut out = json!({"engine":"Chromium/CEF", "pane":self.pane, "profile":self.profile, "url":self.url, "title":self.title, "loading":self.loading, "page_error":self.error, "notice":self.notice, "auth":self.auth.as_ref().map(|a| &a.host), "visible":self.allowed.get()});
         #[cfg(target_os = "macos")]
         if let Some(host) = &self.host {
             out["native"] = host.inspect();
@@ -335,6 +413,14 @@ impl Browser {
             }
             cx.spawn(async move |this, cx| {
                 let result = async {
+                    if name == "browser.signin"
+                        && this.update(cx, |b, _| b.auth.is_some()).unwrap_or(false)
+                    {
+                        let login = control::login(&args, cx.background_executor()).await?;
+                        return this
+                            .update(cx, |b, cx| b.http_sign_in(login, cx))
+                            .map_err(|_| "Browser pane was closed".to_string())?;
+                    }
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
                     let control = loop {
                         let page = host.upgrade().ok_or("Browser pane was closed")?;
@@ -543,6 +629,51 @@ impl Render for Browser {
                         .child(message),
                 )
             })
+            .when_some(self.auth.as_ref().map(|a| a.host.clone()), |el, host| {
+                let field = |input: &Entity<InputState>| {
+                    div()
+                        .w(px(180.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .px(px(8.))
+                        .rounded_md()
+                        .bg(color("surface"))
+                        .border_1()
+                        .border_color(color("border"))
+                        .child(Input::new(input))
+                };
+                let answer = |id: &'static str, label: &'static str, submit: bool| {
+                    div()
+                        .id(id)
+                        .h(px(28.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(color("hover")))
+                        .on_click(cx.listener(move |this, _, w, cx| this.sign_in(submit, w, cx)))
+                        .child(label)
+                };
+                el.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .bg(color("popover"))
+                        .border_b_1()
+                        .border_color(color("border"))
+                        .text_size(px(12.))
+                        .child(format!("Sign in to {host}"))
+                        .child(field(&self.credentials[0]))
+                        .child(field(&self.credentials[1]))
+                        .child(answer("browser-auth-submit", "Sign in", true))
+                        .child(answer("browser-auth-cancel", "Cancel", false)),
+                )
+            })
             .when_some(self.error.clone(), |el, error| {
                 el.child(
                     div()
@@ -577,6 +708,31 @@ mod tests {
                 .as_deref(),
             Some(url)
         );
+    }
+
+    #[gpui::test]
+    fn typed_sign_in_answers_the_challenge_and_leaving_cancels_it(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_base::init);
+        let (browser, cx) = cx.add_window_view(|window, cx| {
+            super::Browser::new("browser-test", &serde_json::json!({"url": "https://example.com"}), window, cx)
+        });
+        let answers = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let challenge = || {
+            let answers = answers.clone();
+            super::Event::Auth(super::Auth {
+                host: "example.com".into(),
+                reply: Some(Box::new(move |login| answers.borrow_mut().push(login))),
+            })
+        };
+        browser.update_in(cx, |browser, window, cx| {
+            browser.event(challenge(), window, cx);
+            browser.credentials[0].update(cx, |i, cx| i.set_value("me", window, cx));
+            browser.credentials[1].update(cx, |i, cx| i.set_value("secret", window, cx));
+            browser.sign_in(true, window, cx);
+            browser.event(challenge(), window, cx);
+            browser.event(super::Event::Loading("https://example.com/next".into()), window, cx);
+        });
+        assert_eq!(*answers.borrow(), [Some(("me".to_string(), "secret".to_string())), None]);
     }
 
     #[test]

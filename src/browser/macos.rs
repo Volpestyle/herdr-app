@@ -64,8 +64,22 @@ wrap_load_handler! {
     }
 }
 wrap_request_handler! {
-    struct Navigation;
+    struct Navigation { tx: Option<Tx> }
     impl RequestHandler {
+        fn auth_credentials(&self, _browser: Option<&mut Browser>, _origin: Option<&CefString>, _proxy: i32, host: Option<&CefString>, _port: i32, _realm: Option<&CefString>, _scheme: Option<&CefString>, callback: Option<&mut AuthCallback>) -> i32 {
+            // The pane asks for the sign-in itself: Chromium's own prompt
+            // crashes the app when its pane closes first. A popup has no pane
+            // to ask in, so its challenge is declined.
+            let (Some(tx), Some(callback)) = (&self.tx, callback) else { return 0 };
+            let callback = callback.clone();
+            let reply: Box<dyn FnOnce(Option<(String, String)>)> = Box::new(move |login| match login {
+                Some((user, password)) => callback.cont(Some(&user.as_str().into()), Some(&password.as_str().into())),
+                None => callback.cancel(),
+            });
+            let host = host.map(CefString::to_string).unwrap_or_default();
+            let _ = tx.try_send(Event::Auth(super::Auth { host, reply: Some(reply) }));
+            1
+        }
         fn on_before_browse(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, _gesture: i32, _redirect: i32) -> i32 {
             if !frame.is_some_and(|f| f.is_main() != 0) { return 0; }
             request.is_some_and(|r| !web_url(&CefString::from(&r.url()).to_string())) as i32
@@ -129,7 +143,7 @@ wrap_life_span_handler! {
 wrap_client! {
     struct PopupClient;
     impl Client {
-        fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new()) }
+        fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new(None)) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(PopupLife::new()) }
     }
 }
@@ -172,7 +186,7 @@ wrap_client! {
     impl Client {
         fn display_handler(&self) -> Option<DisplayHandler> { Some(Display::new(self.tx.clone())) }
         fn load_handler(&self) -> Option<LoadHandler> { Some(Load::new(self.tx.clone())) }
-        fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new()) }
+        fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new(Some(self.tx.clone()))) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone(), self.browser.clone(), self.closing.clone(), self.pending.clone())) }
         fn focus_handler(&self) -> Option<FocusHandler> { Some(Focus::new(self.gate.clone())) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone(), self.ask)) }

@@ -108,7 +108,10 @@ wrap_app! {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> { Some(ProcessHandler::new(self.pump.clone())) }
         fn on_before_command_line_processing(&self, process_type: Option<&CefString>, command_line: Option<&mut CommandLine>) {
             let browser = process_type.is_none_or(|t| t.to_string().is_empty());
-            if let (true, true, Some(line)) = (browser, super::cdp::reserved(), command_line) {
+            let (true, Some(line)) = (browser, command_line) else { return };
+            // Without this, Chrome style shows its own sign-in prompt and never asks the pane.
+            line.append_switch(Some(&"disable-chrome-login-prompt".into()));
+            if super::cdp::reserved() {
                 line.append_switch(Some(&"remote-debugging-pipe".into()));
             }
         }

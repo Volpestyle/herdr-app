@@ -1089,6 +1089,9 @@ Page commands return their result through `herdr-browser do`:
   appear in replies, argv or logs. Handles username-then-password pages.
   For checked-in test credentials, `browser.signin {env_file, user_key, password_key, site}`
   reads the two values from a dotenv file instead and fills only on `site` (a host).
+  When the page asks for an HTTP sign-in instead (`browser.inspect` reports the
+  asking host as `auth`, and the pane shows a username/password row), the same
+  command answers it, under the same host rule.
 - `browser.press {pane?, key}`: a page key such as Enter, Tab, Escape,
   ArrowDown, or a character/chord such as `Meta+a`. Password input is refused.
 - `browser.scroll {pane?, ref? | name | dy}`: scroll an element into view or wheel the
