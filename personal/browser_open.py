@@ -2,6 +2,7 @@
 """Open webpages in Herdr Browser, starting the macOS app when needed."""
 from pathlib import Path
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -25,7 +26,10 @@ def open_urls(urls, *, launcher=None, app=None, timeout=15):
             updated = subprocess.run([str(updater), 'install'], stdout=subprocess.DEVNULL)
             if updated.returncode:
                 print('herdr-browser-open: update installation failed; opening the installed app.', file=sys.stderr)
-        subprocess.run(['/usr/bin/open', app], check=True)
+        # `open` hands this shell's environment to the app and every terminal
+        # it starts; an agent shell's NO_COLOR would turn them all monochrome.
+        env = {k: v for k, v in os.environ.items() if k not in ('NO_COLOR', 'FORCE_COLOR')}
+        subprocess.run(['/usr/bin/open', app], check=True, env=env)
         deadline = time.monotonic() + timeout
         while not running():
             if time.monotonic() >= deadline:

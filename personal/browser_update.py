@@ -217,6 +217,9 @@ def pin_engine(tree, version):
     text, count = re.subn(r'(?m)^(cef\s*=\s*\{\s*version\s*=\s*")[^"]*(")',
                          lambda m: m[1] + '=' + version + m[2], cargo.read_text())
     if count != 1: raise RuntimeError('Cannot locate the native Chromium dependency')
+    # cef requires the cef-dll-sys of its own release; move an explicit pin with it.
+    text = re.sub(r'(?m)^(cef-dll-sys\s*=\s*\{\s*version\s*=\s*")[^"]*(")',
+                  lambda m: m[1] + '=' + version + m[2], text)
     cargo.write_text(text)
 
 
