@@ -45,8 +45,8 @@ FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs'
 # Stock CEF has no H.264/AAC. This archive is the framework rebuilt locally with
 # proprietary codecs, for this Mac only: nothing fetches, uploads or hosts it.
 CEF_FRAMEWORK = 'Chromium Embedded Framework.framework'
-CEF_CODEC_VERSION = '156.0.15'
-CEF_CODEC_SHA256 = '5738067a62c992721c888a3340d5802914f2f23ffdd6d2328573d4f5e06c660e'
+CEF_CODEC_VERSION = '156.0.26'
+CEF_CODEC_SHA256 = 'e2d7252fd07302d8e8447e0c35f7d25b63c59675224e8106ee9f278eaa2684ae'
 CEF_CODEC_ARCHIVE = Path.home() / 'cef-build' / f'cef-{CEF_CODEC_VERSION}-codecs-framework.tar.bz2'
 
 
