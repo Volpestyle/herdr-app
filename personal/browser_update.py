@@ -38,7 +38,7 @@ CHROME_RELEASES_FEED = 'https://chromereleases.googleblog.com/feeds/posts/defaul
 UPDATE_COMMAND = 'herdr-browser-update check --force'
 LABEL = 'dev.james.herdr-browser-updater'
 FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs', 'src/mods.rs',
-                 'src/browser.rs', 'src/browser', 'src/control.rs', 'src/terminal.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
+                 'src/browser.rs', 'src/browser', 'src/control.rs', 'src/terminal.rs', 'src/vt.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
                  'defaults/mods/new-menu', 'defaults/mods/native-browser',
                  'defaults/keys.macos.json',
                  'licenses/CEF.txt', 'licenses/inventory.json']

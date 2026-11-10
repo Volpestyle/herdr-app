@@ -1688,6 +1688,12 @@ impl Vt {
     /// Option for "\u{df}" on a Mac), as Ghostty reports them. Without it the
     /// kitty keyboard protocol reports shift+; and Neovim never sees ":".
     pub fn encode_key(&mut self, key: GhosttyKey, mods: GhosttyMods, consumed: GhosttyMods, text: Option<&str>, unshifted: Option<char>) -> Vec<u8> {
+        self.encode_key_action(GHOSTTY_KEY_ACTION_PRESS, key, mods, consumed, text, unshifted)
+    }
+
+    /// `encode_key` for any action: a release, or a modifier key by itself,
+    /// encodes to nothing unless the program asked for those events.
+    pub fn encode_key_action(&mut self, action: GhosttyKeyAction, key: GhosttyKey, mods: GhosttyMods, consumed: GhosttyMods, text: Option<&str>, unshifted: Option<char>) -> Vec<u8> {
         unsafe {
             ghostty_key_encoder_setopt_from_terminal(self.keys, self.term);
             #[cfg(target_os = "macos")]
@@ -1701,7 +1707,7 @@ impl Vt {
                 ghostty_key_encoder_setopt(self.keys, GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &option as *const _ as *const c_void);
             }
             let e = self.key_event;
-            ghostty_key_event_set_action(e, GHOSTTY_KEY_ACTION_PRESS);
+            ghostty_key_event_set_action(e, action);
             ghostty_key_event_set_key(e, key);
             ghostty_key_event_set_mods(e, mods);
             let printable = text.is_some_and(|t| !t.is_empty() && !t.chars().any(|c| c.is_control()));

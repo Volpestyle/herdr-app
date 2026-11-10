@@ -114,6 +114,8 @@ pub struct TerminalView {
     grid: Rc<RefCell<Grid>>,
     focus: FocusHandle,
     was_focused: bool,
+    /// The modifier keys held at the last change, to tell which one moved.
+    held: Modifiers,
     /// The window frame this terminal was last put on screen in (`FRAME`).
     shown_in: Cell<u64>,
     /// When the person last typed here: output right after is shown at once.
@@ -272,6 +274,7 @@ impl TerminalView {
             })),
             focus: cx.focus_handle(),
             was_focused: false,
+            held: Modifiers::default(),
             shown_in: Cell::new(0),
             typed_at: Cell::new(None),
             scrolled: point(0.0, 0.0),
@@ -809,6 +812,27 @@ impl TerminalView {
         }
     }
 
+    fn key_up(&mut self, ev: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_field_focused(window, cx) {
+            return;
+        }
+        let bytes = release_bytes(&mut self.grid.borrow_mut().vt, &ev.keystroke);
+        if !bytes.is_empty() {
+            self.send(&bytes);
+        }
+    }
+
+    fn modifiers_changed(&mut self, ev: &ModifiersChangedEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let before = std::mem::replace(&mut self.held, ev.modifiers);
+        if self.find_field_focused(window, cx) {
+            return;
+        }
+        let bytes = modifier_bytes(&mut self.grid.borrow_mut().vt, before, ev.modifiers);
+        if !bytes.is_empty() {
+            self.send(&bytes);
+        }
+    }
+
     fn scroll(&mut self, ev: &ScrollWheelEvent, _w: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let mut g = self.grid.borrow_mut();
@@ -1335,6 +1359,45 @@ fn key_bytes(vt: &mut vt::Vt, ev: &KeyDownEvent) -> Option<Vec<u8>> {
         consumed |= GHOSTTY_MODS_ALT as GhosttyMods;
     }
     Some(vt.encode_key(key, mods, consumed, text.as_deref(), unshifted))
+}
+
+fn held_mods(m: Modifiers, shifted: bool) -> GhosttyMods {
+    let held = [(m.shift || shifted, GHOSTTY_MODS_SHIFT), (m.control, GHOSTTY_MODS_CTRL), (m.alt, GHOSTTY_MODS_ALT), (m.platform, GHOSTTY_MODS_SUPER)];
+    held.iter().filter(|(on, _)| *on).fold(0, |mods, (_, bit)| mods | *bit as GhosttyMods)
+}
+
+/// What letting go of a key sends: nothing unless the program asked for
+/// release events (kitty keyboard flag 2), as a program telling a held
+/// modifier from a fresh chord does.
+fn release_bytes(vt: &mut vt::Vt, k: &Keystroke) -> Vec<u8> {
+    if vt.kitty_keyboard_flags() & 2 == 0 {
+        return Vec::new();
+    }
+    let Some((key, shifted, unshifted)) = map_key(&k.key) else { return Vec::new() };
+    vt.encode_key_action(GHOSTTY_KEY_ACTION_RELEASE, key, held_mods(k.modifiers, shifted), 0, None, unshifted)
+}
+
+/// What a modifier key going down or up by itself sends: nothing unless the
+/// program asked for every key as an escape code (kitty keyboard flag 8).
+/// GPUI doesn't say which side moved, so it is reported as the left key.
+fn modifier_bytes(vt: &mut vt::Vt, before: Modifiers, now: Modifiers) -> Vec<u8> {
+    if vt.kitty_keyboard_flags() & 8 == 0 {
+        return Vec::new();
+    }
+    let keys = [
+        (before.control, now.control, GHOSTTY_KEY_CONTROL_LEFT),
+        (before.shift, now.shift, GHOSTTY_KEY_SHIFT_LEFT),
+        (before.alt, now.alt, GHOSTTY_KEY_ALT_LEFT),
+        (before.platform, now.platform, GHOSTTY_KEY_META_LEFT),
+    ];
+    let mut bytes = Vec::new();
+    for (was, is, key) in keys {
+        if was != is {
+            let action = if is { GHOSTTY_KEY_ACTION_PRESS } else { GHOSTTY_KEY_ACTION_RELEASE };
+            bytes.extend(vt.encode_key_action(action, key, held_mods(now, false), 0, None, None));
+        }
+    }
+    bytes
 }
 
 fn control_alias_bytes(vt: &mut vt::Vt, key: GhosttyKey, text: &str, shifted: bool, legacy: Vec<u8>) -> Vec<u8> {
@@ -1934,6 +1997,8 @@ impl Render for TerminalView {
                 }
             }))
             .on_key_down(cx.listener(Self::key_down))
+            .on_key_up(cx.listener(Self::key_up))
+            .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.dropped(paths.paths().to_vec(), cx)))
             .on_scroll_wheel(cx.listener(Self::scroll))
             .when(self.link.is_some(), |d| d.cursor_pointer())
@@ -3327,6 +3392,23 @@ mod tests {
             is_held: false,
             prefer_character_input: false,
         }
+    }
+
+    #[test]
+    fn releases_and_bare_modifiers_reach_only_programs_that_asked() {
+        let ctrl = Modifiers { control: true, ..Modifiers::default() };
+        let ctrl_q = press("ctrl-q", None).keystroke;
+        let mut vt = Vt::new(20, 3);
+        for quiet in [b"".as_slice(), b"\x1b[>1u"] {
+            vt.write(quiet);
+            assert!(super::release_bytes(&mut vt, &ctrl_q).is_empty());
+            assert!(super::modifier_bytes(&mut vt, ctrl, Modifiers::default()).is_empty());
+        }
+        vt.write(b"\x1b[>11u");
+        assert_eq!(key_bytes(&mut vt, &press("ctrl-q", None)).unwrap(), b"\x1b[113;5u");
+        assert_eq!(super::release_bytes(&mut vt, &ctrl_q), b"\x1b[113;5:3u");
+        assert_eq!(super::modifier_bytes(&mut vt, Modifiers::default(), ctrl), b"\x1b[57442;5u");
+        assert_eq!(super::modifier_bytes(&mut vt, ctrl, Modifiers::default()), b"\x1b[57442;1:3u");
     }
 
     #[test]
