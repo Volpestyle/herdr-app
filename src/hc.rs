@@ -436,7 +436,11 @@ impl Core {
     /// Starts a program in a new core terminal and returns its address (`tN`).
     /// Starts a terminal, here or on another machine (`on`: its name in `hc machine ls`).
     pub fn run(&self, argv: Vec<String>, cwd: Option<String>, labels: Value, on: Option<&str>, size: Option<(u16, u16)>, display: Value) -> Result<String> {
-        let mut env = json!({"TERM": "xterm-256color", "COLORTERM": "truecolor", "TERM_PROGRAM": "herdr"});
+        // The core hands programs its own environment. A core started from an
+        // agent's shell carries NO_COLOR=1 and FORCE_COLOR=0, which turn color
+        // off in every pane; blank values leave color to the terminal (the core
+        // cannot unset a variable).
+        let mut env = json!({"TERM": "xterm-256color", "COLORTERM": "truecolor", "TERM_PROGRAM": "herdr", "NO_COLOR": "", "FORCE_COLOR": ""});
         if on.is_none() && cfg!(target_os = "macos") {
             env["HERDR_BROWSER"] = "1".into();
             env["BROWSER"] = "herdr-browser-open".into();
@@ -672,6 +676,8 @@ mod tests {
             assert_eq!(request["method"], "terminal.run");
             assert_eq!(request["params"]["size"], json!({"cols": 80, "rows": 24}));
             assert_eq!(request["params"]["display"], expected);
+            assert_eq!(request["params"]["env"]["NO_COLOR"], "");
+            assert_eq!(request["params"]["env"]["FORCE_COLOR"], "");
             routes.lock().unwrap().replies.remove(&request["id"].as_u64().unwrap()).unwrap()
                 .send(Ok(json!({"address": "t1"}))).unwrap();
         });
