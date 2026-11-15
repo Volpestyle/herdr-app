@@ -1,7 +1,7 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window } from "herdr";
+import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -11,6 +11,7 @@ function location() {
 }
 const key = () => JSON.stringify(location());
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
+const MARKDOWN = new Set(["md", "markdown", "mdx"]);
 const PER_FOLDER = 500, TOTAL = 5000;
 
 async function directory(path, on) {
@@ -51,7 +52,7 @@ export default class Files extends View {
     this.watched = root;
     const context = this.context;
     cx.spawn(async cx => {
-      try { while (this.context === context) { await watchFolder(root); if (this.current(context)) this.refresh(cx); } }
+      try { while (this.context === context) { await watchFolder(root); if (this.current(context)) { this.refresh(cx); if (this.file) this.read(this.file, cx); } } }
       catch { if (this.context === context) this.watched = null; }
     });
   }
@@ -128,8 +129,21 @@ export default class Files extends View {
   }
 
   show(path, cx) {
-    this.code?.release(); this.code = null; this.file = path; this.fileError = null;
-    if (!path || !cx) return;
+    this.code?.release(); this.code = null; this.text = null; this.markdown = null; this.file = path; this.fileError = null;
+    if (path && cx) this.read(path, cx);
+  }
+
+  // Markdown links: web pages open in a browser tab, relative files in this panel.
+  link(url, cx) {
+    if (/^https?:/i.test(url)) return run("browser.open", { url });
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url) || !url.split("#")[0]) return;
+    const out = [];
+    for (const part of [...this.file.split("/").slice(0, -1), ...url.split("#")[0].split("/")])
+      part === ".." ? out.pop() : part && part !== "." && out.push(part);
+    this.show(out.join("/"), cx);
+  }
+
+  read(path, cx) {
     const context = this.context, root = this.root, on = this.on;
     cx.spawn(async cx => {
       try {
@@ -137,9 +151,13 @@ export default class Files extends View {
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
-        const t = theme(), ext = path.includes(".") ? path.split(".").pop() : "txt";
-        this.code = EditorState.new({ language: LANG[ext] ?? ext, readonly: true,
-          value: text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text,
+        const value = text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text;
+        if (this.code && value === this.text) return;
+        const t = theme(), ext = path.includes(".") ? path.split(".").pop().toLowerCase() : "txt";
+        this.code?.release();
+        this.text = value;
+        this.markdown = MARKDOWN.has(ext) ? value : null;
+        this.code = EditorState.new({ language: LANG[ext] ?? ext, readonly: true, value,
           font_family: settings().font_family, font_size: 12,
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
       } catch { if (this.file === path && this.current(context)) this.fileError = "Cannot preview this file (binary, too large, or unreadable)"; }
@@ -170,10 +188,14 @@ export default class Files extends View {
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? "")))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        .when(this.markdown != null, el => el.child(div().id("files-markdown-source").flex_none().cursor_pointer().text_size(12).text_color(t.muted).hover(s => s.text_color(t.foreground))
+          .on_click((_e, cx) => { this.source = !this.source; cx.notify(); }).child(this.source ? "Rendered" : "Source"))))
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
-      .when(Boolean(this.file), el => el.child(this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")));
+      .when(Boolean(this.file), el => el.child(this.markdown != null && !this.source
+        ? TextView.markdown("files-markdown", this.markdown).selectable(true).scrollable(true).on_link_click((url, cx) => this.link(url, cx)).flex_1().min_h(0).px(18).py(14)
+        : this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")));
   }
 }

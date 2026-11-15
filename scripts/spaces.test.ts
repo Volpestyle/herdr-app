@@ -36,6 +36,7 @@ function harness(replies: unknown[] = [], storage = new Map<string, string>(), s
   const view = new Spaces();
   view.reconnecting = {};
   view.folded = new Set(["cloud"]);
+  view.open = new Set();
   view.refreshMachines = () => {};
   const cx = { timer: { every() {} }, notify() {}, spawn(fn: (cx: unknown) => Promise<unknown>) { tasks.push(fn(cx)); } };
   return { view, calls, tasks, cx, storage, moves, handlers, snapshot, availability };
