@@ -48,6 +48,7 @@ pub enum Event {
     Notice(String),
     Error(String),
     Auth(Auth),
+    Closed,
 }
 
 /// A page's HTTP sign-in challenge, answered from the pane. Dropping it cancels.
@@ -100,6 +101,45 @@ pub fn address(input: &str) -> Result<String, String> {
     Ok(parsed.into())
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Favorite {
+    title: String,
+    url: String,
+}
+
+/// The favorites bar every browser pane shows, saved in favorites.json.
+struct Favorites(Vec<Favorite>);
+impl Global for Favorites {}
+
+impl Favorites {
+    fn path() -> std::path::PathBuf {
+        crate::mods::app_dir().join("favorites.json")
+    }
+    fn load() -> Self {
+        let path = Self::path();
+        let Ok(bytes) = std::fs::read(&path) else { return Self(Vec::new()) };
+        match serde_json::from_slice(&bytes) {
+            Ok(list) => Self(list),
+            Err(e) => {
+                tracing::warn!("favorites.json unreadable ({e}); kept as favorites.json.bad");
+                let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                Self(Vec::new())
+            }
+        }
+    }
+    fn save(&self) {
+        let path = Self::path();
+        let temp = path.with_extension("json.tmp");
+        let written = serde_json::to_vec_pretty(&self.0)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&temp, bytes))
+            .and_then(|_| std::fs::rename(&temp, &path));
+        if let Err(e) = written {
+            tracing::warn!("Cannot save favorites.json: {e}");
+        }
+    }
+}
+
 pub struct Browser {
     pane: String,
     profile: String,
@@ -117,6 +157,7 @@ pub struct Browser {
     recording: Cell<bool>,
     _input: Subscription,
     _credentials: [Subscription; 2],
+    _favorites: Subscription,
     _events: Task<()>,
 }
 
@@ -150,6 +191,10 @@ impl Browser {
                 }
             })
         });
+        if !cx.has_global::<Favorites>() {
+            cx.set_global(Favorites::load());
+        }
+        let favorites = cx.observe_global::<Favorites>(|_, cx| cx.notify());
         let profile = props
             .get("profile")
             .and_then(Value::as_str)
@@ -192,6 +237,7 @@ impl Browser {
             host,
             _input: subscription,
             _credentials: submit,
+            _favorites: favorites,
             _events: events,
         }
     }
@@ -240,6 +286,12 @@ impl Browser {
             Event::Focused => {
                 crate::mods::request(crate::mods::Request::Run {
                     name: "pane.focus".into(),
+                    args: json!({"pane":self.pane}),
+                });
+            }
+            Event::Closed => {
+                crate::mods::request(crate::mods::Request::Run {
+                    name: "pane.close".into(),
                     args: json!({"pane":self.pane}),
                 });
             }
@@ -327,6 +379,20 @@ impl Browser {
                 host.focus_parent();
             }
         }
+    }
+
+    fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        let url = self.url.clone();
+        let title = if self.title.trim().is_empty() { url.clone() } else { self.title.clone() };
+        cx.update_global::<Favorites, _>(|favorites, _| {
+            match favorites.0.iter().position(|f| f.url == url) {
+                Some(i) => {
+                    favorites.0.remove(i);
+                }
+                None => favorites.0.push(Favorite { title, url }),
+            }
+            favorites.save();
+        });
     }
 
     fn focus_url(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -512,6 +578,42 @@ impl Browser {
 impl Render for Browser {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color = crate::settings::color;
+        let favorites = cx.global::<Favorites>().0.clone();
+        let bar = (!favorites.is_empty()).then(|| {
+            div()
+                .flex_none()
+                .h(px(30.))
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(px(2.))
+                .px(px(8.))
+                .overflow_hidden()
+                .bg(color("popover"))
+                .border_b_1()
+                .border_color(color("border"))
+                .text_size(px(12.))
+                .children(favorites.iter().enumerate().map(|(i, f)| {
+                    let url = f.url.clone();
+                    div()
+                        .id(("browser-favorite", i))
+                        .flex_none()
+                        .max_w(px(180.))
+                        .h(px(24.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(color("hover")))
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            if this.navigate(&url, w, cx).is_ok() {
+                                this.focus_page();
+                            }
+                        }))
+                        .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(f.title.clone()))
+                }))
+        });
         let button = |id: &'static str, label: &'static str, command: &'static str| {
             div()
                 .id(id)
@@ -559,6 +661,22 @@ impl Render for Browser {
                         .text_size(px(13.))
                         .child(Input::new(&self.input)),
                 )
+                .child({
+                    let starred = favorites.iter().any(|f| f.url == self.url);
+                    div()
+                        .id("browser-favorite")
+                        .w(px(30.))
+                        .h(px(30.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .text_color(if starred { color("foreground") } else { color("muted") })
+                        .hover(|s| s.bg(color("hover")))
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_favorite(cx)))
+                        .child(if starred { "★" } else { "☆" })
+                })
                 .child({
                     let recording = self.recording.get();
                     div()
@@ -620,6 +738,7 @@ impl Render for Browser {
             .flex_col()
             .text_color(color("foreground"))
             .child(toolbar)
+            .when_some(bar, |el, bar| el.child(bar))
             .when_some(self.notice.clone(), |el, message| {
                 el.child(
                     div()

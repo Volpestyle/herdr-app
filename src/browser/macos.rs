@@ -84,6 +84,27 @@ wrap_request_handler! {
             if !frame.is_some_and(|f| f.is_main() != 0) { return 0; }
             request.is_some_and(|r| !web_url(&CefString::from(&r.url()).to_string())) as i32
         }
+        // Cmd-click and middle-click ask for a new tab here, not as a popup;
+        // left alone, Chromium has no tab strip to put it in and drops it.
+        fn on_open_urlfrom_tab(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, url: Option<&CefString>, disposition: WindowOpenDisposition, _gesture: i32) -> i32 {
+            let Some(tx) = &self.tx else { return 0 };
+            let url = url.map(CefString::to_string).unwrap_or_default();
+            let new_tab = matches!(disposition, WindowOpenDisposition::NEW_BACKGROUND_TAB | WindowOpenDisposition::NEW_FOREGROUND_TAB | WindowOpenDisposition::NEW_WINDOW);
+            if !new_tab || !web_url(&url) { return 0; }
+            let _ = tx.try_send(Event::Open(url));
+            1
+        }
+    }
+}
+/// Herdr's own closes empty the pane's cell first, so a browser still in it
+/// closed itself (window.close()). Its view is going away: the pane must stop
+/// placing it and close, as a browser tab would.
+fn closed_itself(cell: &std::rc::Weak<RefCell<Option<Browser>>>, tx: &Tx, browser: &Browser) {
+    let Some(cell) = cell.upgrade() else { return };
+    let Ok(mut held) = cell.try_borrow_mut() else { return };
+    if held.as_ref().is_some_and(|b| b.identifier() == browser.identifier()) {
+        held.take();
+        let _ = tx.try_send(Event::Closed);
     }
 }
 wrap_life_span_handler! {
@@ -100,12 +121,17 @@ wrap_life_span_handler! {
                 } else if let Some(host) = browser.host() { host.close_browser(1); }
             } }
         }
-        fn on_before_close(&self, _browser: Option<&mut Browser>) { runtime::ACTIVE.fetch_sub(1, Ordering::Relaxed); }
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            if let Some(browser) = browser { closed_itself(&self.browser, &self.tx, browser); }
+            runtime::ACTIVE.fetch_sub(1, Ordering::Relaxed);
+        }
         fn do_close(&self, browser: Option<&mut Browser>) -> i32 {
+            let Some(browser) = browser else { return 1 };
             // Tear down this child view, never Herdr's top-level window.
-            if let Some(host) = browser.and_then(|b| b.host()) {
+            if let Some(host) = browser.host() {
                 if let Some(view) = unsafe { host.window_handle().cast::<NSView>().as_ref() } { view.removeFromSuperview(); }
             }
+            closed_itself(&self.browser, &self.tx, browser);
             1
         }
         fn on_before_popup(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _id: i32, url: Option<&CefString>, _name: Option<&CefString>, disposition: WindowOpenDisposition, _gesture: i32, _features: Option<&PopupFeatures>, _window: Option<&mut WindowInfo>, client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>, _extra: Option<&mut Option<DictionaryValue>>, _no_js: Option<&mut i32>) -> i32 {
@@ -472,6 +498,21 @@ impl Host {
                 return event.as_ptr();
             }
             let flags = e.modifierFlags();
+            // AppKit offers arrows and paging keys to GPUI's view as key
+            // equivalents first, and GPUI feeds them to its own text input
+            // context even though the page has the keyboard. Hand them over.
+            if matches!(e.keyCode(), 115..=117 | 119 | 121 | 123..=126)
+                && !flags.intersects(
+                    NSEventModifierFlags::Command
+                        | NSEventModifierFlags::Control
+                        | NSEventModifierFlags::Option,
+                )
+            {
+                if let Some(responder) = event_window.firstResponder() {
+                    responder.keyDown(e);
+                    return std::ptr::null_mut();
+                }
+            }
             if !flags.contains(NSEventModifierFlags::Command)
                 || flags.contains(NSEventModifierFlags::Control)
             {
