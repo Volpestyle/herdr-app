@@ -2945,7 +2945,7 @@ impl AppWindow {
                 let result = match place {
                     Some("right") => self.split_mod(Self::owned(a, "pane"), Axis::Row, crate::browser::MOD.into(), props),
                     Some("down") => self.split_mod(Self::owned(a, "pane"), Axis::Column, crate::browser::MOD.into(), props),
-                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), Self::arg(a, "name").unwrap_or("Browser"), crate::browser::MOD.into(), props),
+                    Some("tab") | None => self.new_mod_tab(Self::owned(a, "space"), Self::arg(a, "name").unwrap_or(""), crate::browser::MOD.into(), props),
                     _ => Err("place must be tab, right, or down (browser.split: right or down)".into()),
                 };
                 self.answer(result);
