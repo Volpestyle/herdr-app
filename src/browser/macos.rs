@@ -228,6 +228,7 @@ pub struct Host {
     shown: Cell<bool>,
     allowed: Rc<Cell<bool>>,
     bounds: Cell<Option<[f64; 4]>>,
+    cut: Cell<f64>,
     focus_pending: Cell<bool>,
     focus_gate: Arc<AtomicBool>,
     monitor: Option<Retained<AnyObject>>,
@@ -399,6 +400,8 @@ impl Host {
             NSRect::new(NSPoint::new(0., 0.), initial),
         );
         container.setHidden(true);
+        // place() shortens the container over a taller page to keep toasts visible.
+        container.setClipsToBounds(true);
         parent.addSubview(&container);
         let info = WindowInfo {
             runtime_style: RuntimeStyle::CHROME,
@@ -568,6 +571,7 @@ impl Host {
             shown: Cell::new(false),
             allowed,
             bounds: Cell::new(None),
+            cut: Cell::new(0.),
             focus_pending: Cell::new(true),
             focus_gate,
             monitor,
@@ -610,28 +614,36 @@ impl Host {
             self.container.setHidden(true);
         }
     }
-    pub fn place(&self, bounds: Bounds<Pixels>, allowed: bool) {
+    pub fn place(&self, bounds: Bounds<Pixels>, allowed: bool, clear: Option<Bounds<Pixels>>) {
         let rect = [
             f64::from(f32::from(bounds.origin.x)),
             f64::from(f32::from(bounds.origin.y)),
             f64::from(f32::from(bounds.size.width)),
             f64::from(f32::from(bounds.size.height)),
         ];
-        if !allowed || rect[2] < 1. || rect[3] < 1. {
+        // The page keeps its size and loses its bottom rows to `clear`, so it
+        // neither reflows nor blanks while a toast is up.
+        let cut = clear.filter(|c| c.intersects(&bounds)).map_or(0., |c| f64::from(f32::from(bounds.bottom() - c.top())));
+        if !allowed || rect[2] < 1. || rect[3] - cut < 1. {
             self.set_allowed(false);
             return;
         }
         let y = if self.parent.isFlipped() {
             rect[1]
         } else {
-            self.parent.bounds().size.height - rect[1] - rect[3]
+            self.parent.bounds().size.height - rect[1] - rect[3] + cut
         };
+        let view = self.native_view();
+        if let Some(view) = view {
+            view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewNotSizable);
+        }
         self.container.setFrame(NSRect::new(
             NSPoint::new(rect[0], y),
-            NSSize::new(rect[2], rect[3]),
+            NSSize::new(rect[2], rect[3] - cut),
         ));
-        if let Some(view) = self.native_view() {
-            view.setFrame(self.container.bounds());
+        self.cut.set(cut);
+        if let Some(view) = view {
+            view.setFrame(NSRect::new(NSPoint::new(0., -cut), NSSize::new(rect[2], rect[3])));
             view.setAutoresizingMask(
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
@@ -698,7 +710,7 @@ impl Host {
     pub fn inspect(&self) -> Value {
         let browser = self.browser.borrow();
         let browser = browser.as_ref();
-        json!({"url":page_url(browser), "bounds":self.bounds.get(), "shown":self.shown.get(), "focused":self.is_focused(), "window":self.window.windowNumber(), "scale_factor":self.window.backingScaleFactor(), "window_visible":self.window.isVisible(), "window_key":self.window.isKeyWindow(), "parent_hidden":self.parent.isHidden(), "parent_bounds":[self.parent.bounds().size.width,self.parent.bounds().size.height], "can_go_back":browser.is_some_and(|b| b.can_go_back() != 0), "can_go_forward":browser.is_some_and(|b| b.can_go_forward() != 0), "active_browsers":runtime::ACTIVE.load(Ordering::Relaxed), "pump_ticks":runtime::TICKS.load(Ordering::Relaxed)})
+        json!({"url":page_url(browser), "bounds":self.bounds.get(), "shown":self.shown.get(), "cut":self.cut.get(), "focused":self.is_focused(), "window":self.window.windowNumber(), "scale_factor":self.window.backingScaleFactor(), "window_visible":self.window.isVisible(), "window_key":self.window.isKeyWindow(), "parent_hidden":self.parent.isHidden(), "parent_bounds":[self.parent.bounds().size.width,self.parent.bounds().size.height], "can_go_back":browser.is_some_and(|b| b.can_go_back() != 0), "can_go_forward":browser.is_some_and(|b| b.can_go_forward() != 0), "active_browsers":runtime::ACTIVE.load(Ordering::Relaxed), "pump_ticks":runtime::TICKS.load(Ordering::Relaxed)})
     }
 }
 impl Drop for Host {

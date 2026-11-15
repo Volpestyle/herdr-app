@@ -23,6 +23,9 @@ def main():
     home.mkdir(parents=True); pages.mkdir()
     (home / 'shared.json').write_text('{"frame.welcomed":"finished"}')
     (home / 'settings.json').write_text('{"sounds":{"enabled":false},"core":"' + str(Path.home() / '.local/bin/hc') + '"}')
+    mod = home / 'mods/toast-smoke'; mod.mkdir(parents=True)
+    (mod / 'mod.json').write_text('{"place":"none"}')
+    (mod / 'main.js').write_text('import { View, div } from "gpui-kit";\nimport { notify } from "herdr";\nexport default class extends View { init() { notify({ title: "Toast smoke", body: "The page stays", timeout: 4000 }); } render() { return div(); } }\n')
     for page in ['one.html', 'two.html']:
         (pages / page).write_text(f'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>{page}</title><style>body{{font:20px system-ui;padding:24px}}button{{font:inherit}}</style><h1>Native Herdr browser</h1><p>Page {page}. Rendered by native Chromium.</p><button onclick="this.textContent=\'Clicked\'">Click test</button><a href="/two.html">Next page</a><script>document.title="{page} / JavaScript ready"</script>')
     (pages / 'download.bin').write_bytes(b'Herdr native download check\n')
@@ -99,6 +102,11 @@ def main():
         command('overlay.close')
         until(lambda: inspected().get('native', {}).get('shown'), 'native view after dialog closes')
         until(lambda: inspected().get('native', {}).get('focused'), 'native page focus after dialog closes')
+        command('mod.open', name='toast-smoke')
+        until(lambda: not inspected().get('native', {}).get('shown'), 'native view behind the toast-posting dialog')
+        command('mod.open', name='toast-smoke')
+        until(lambda: (x := inspected().get('native', {})).get('shown') and x.get('focused') and 0 < x.get('cut', 0) < x['bounds'][3], 'page clipped, shown and focused under a toast')
+        until(lambda: (x := inspected().get('native', {})).get('shown') and x.get('cut') == 0, 'full page after the toast leaves')
         command('browser.navigate', pane=pane, url=url + '/download.bin')
         until(lambda: (home / 'downloads/download.bin').exists(), 'native download')
         assert (home / 'downloads/download.bin').read_bytes() == b'Herdr native download check\n'
@@ -106,7 +114,7 @@ def main():
         until(lambda: inspected().get('title') == 'one.html / JavaScript ready', 'page after download')
         command('browser.focus_url', pane=pane)
         report = {'ok': True, 'home': str(home), 'session': env['HC_SESSION'], 'browser': browser,
-                  'inspection': inspected(), 'user_agent': getattr(server, 'user_agent', None), 'checks': ['page load', 'JavaScript', 'back/forward', 'tab next/prev', 'split bounds', 'dialog hide/show', 'native download', 'address focus']}
+                  'inspection': inspected(), 'user_agent': getattr(server, 'user_agent', None), 'checks': ['page load', 'JavaScript', 'back/forward', 'tab next/prev', 'split bounds', 'dialog hide/show', 'toast clip', 'native download', 'address focus']}
         (work / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2), flush=True)
         if args.keep:

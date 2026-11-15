@@ -1185,5 +1185,6 @@ The ☆ beside the address bar saves the page to the favorites bar under it
 Browser documents stay alive across tab switches; closing their pane destroys
 the native view. With the current GPUI backend, pages are temporarily hidden
 while app menus/dialogs are open so native views cannot cover those controls.
+A notification only cuts the bottom rows off the pages under it; they stay live.
 Personal build updates are managed by `herdr-browser-update`, not the stock
 Herdr binary updater. See `personal/README.md` in the fork.

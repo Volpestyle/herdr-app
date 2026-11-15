@@ -152,6 +152,7 @@ pub struct Browser {
     auth: Option<Auth>,
     credentials: [Entity<InputState>; 2],
     allowed: Rc<Cell<bool>>,
+    clear: Rc<Cell<Option<Bounds<Pixels>>>>,
     #[cfg(target_os = "macos")]
     host: Option<Rc<macos::Host>>,
     recording: Cell<bool>,
@@ -233,6 +234,7 @@ impl Browser {
             credentials,
             recording: Cell::new(false),
             allowed,
+            clear: Rc::default(),
             #[cfg(target_os = "macos")]
             host,
             _input: subscription,
@@ -353,6 +355,11 @@ impl Browser {
         if let Some(host) = &self.host {
             host.set_allowed(allowed);
         }
+    }
+
+    /// Window area the page must leave uncovered (toasts): it draws above GPUI.
+    pub fn set_clear(&self, area: Option<Bounds<Pixels>>) {
+        self.clear.set(area);
     }
 
     pub fn is_focused(&self) -> bool {
@@ -713,6 +720,7 @@ impl Render for Browser {
         #[cfg(target_os = "macos")]
         let host = self.host.clone();
         let allowed = self.allowed.clone();
+        let clear = self.clear.clone();
         let body = div()
             .flex_1()
             .min_h_0()
@@ -725,7 +733,7 @@ impl Render for Browser {
                     move |bounds, _, _| {
                         #[cfg(target_os = "macos")]
                         if let Some(host) = &host {
-                            host.place(bounds, allowed.get());
+                            host.place(bounds, allowed.get(), clear.get());
                         }
                     },
                     |_, _, _, _| {},

@@ -4436,7 +4436,8 @@ impl AppWindow {
         }
     }
 
-    fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// The overlays, and where the toasts are: native pages stop short of them.
+    fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> (Vec<AnyElement>, Option<Bounds<Pixels>>) {
         let mut out = Vec::new();
         let mut toast_y = 16.0;
         // Drawn last, so it stays clickable over an open dialog.
@@ -4444,6 +4445,7 @@ impl AppWindow {
         if pill.is_some() {
             toast_y += UPDATE_PILL_HEIGHT + 8.0;
         }
+        let toast_base = toast_y;
         // Windows under dialogs, popups and toasts; each kind in the order opened
         // (a window pressed last is last: on top).
         let order = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window).chain(self.overlays.iter().filter(|o| o.kind != OverlayKind::Window));
@@ -4520,7 +4522,8 @@ impl AppWindow {
                 .child(format!("herdr-core update failed: {error} · Open Updates")).into_any_element());
         }
         out.extend(pill);
-        out
+        let toasts = (toast_y > toast_base).then(|| Bounds::from_corners(point(viewport.width - settings::z(16.0 + 340.0), viewport.height - settings::z(toast_y)), point(viewport.width, viewport.height)));
+        (out, toasts)
     }
 }
 
@@ -4991,7 +4994,7 @@ impl Render for AppWindow {
         // Native child views must not cover hidden tabs or GPUI menus/dialogs.
         let (_, visible_mods) = self.visible();
         let visible_browsers: HashSet<_> = visible_mods.into_iter().filter(|(_, i)| i.name == crate::browser::MOD).map(|(s, _)| s).collect();
-        let unobscured = self.overlays.is_empty() && self.pane_drag.is_none();
+        let unobscured = self.overlays.iter().all(|o| o.kind == OverlayKind::Toast) && self.pane_drag.is_none();
         for (slot, copy) in &self.copies {
             if let Some(browser) = &copy.browser { browser.read(cx).set_allowed(unobscured && visible_browsers.contains(slot)); }
         }
@@ -5028,7 +5031,10 @@ impl Render for AppWindow {
         let focused = self.focused_path(window, cx);
         let tree = self.render_node(&self.chrome, &focused, None, cx);
         let tree = self.window_frame(tree, window, cx);
-        let overlays = self.render_overlays(window.viewport_size(), cx);
+        let (overlays, toasts) = self.render_overlays(window.viewport_size(), cx);
+        for copy in self.copies.values() {
+            if let Some(browser) = &copy.browser { browser.read(cx).set_clear(toasts); }
+        }
         let tracker = self.float_tracker(cx);
         let win_tracker = self.window_tracker(cx);
         let pane_drag = self.pane_drag_layer(cx);

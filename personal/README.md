@@ -208,7 +208,8 @@ reports successful 1Password installation and its inline menu in browser panes.
 ## Current limits
 
 Native views sit above GPUI's drawing surface. Pages temporarily hide while
-Herdr menus/dialogs are open and return afterward. A pane retains its document
+Herdr menus/dialogs are open and return afterward. A toast only cuts the
+bottom rows off the pages under it, which stay live and focused. A pane retains its document
 across tab switches, but recreating it starts at the original URL; history is
 not restored after restarting the app. Remote-space browsing runs locally.
 External protocol navigation is blocked. Popup URLs currently open in a new
