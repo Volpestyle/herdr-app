@@ -46,10 +46,9 @@ FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs'
 # personal Mac with proprietary codecs; nothing fetches, uploads or hosts it.
 # Each of his Macs archives that one framework itself, so each has its own digest.
 CEF_FRAMEWORK = 'Chromium Embedded Framework.framework'
-CEF_CODEC_VERSION = '156.0.26'
+CEF_CODEC_VERSION = '156.0.28'
 CEF_CODEC_SHA256 = (
-    'e2d7252fd07302d8e8447e0c35f7d25b63c59675224e8106ee9f278eaa2684ae',  # personal Mac, where it was built
-    'e456f327b8d256852fcae6ab8b26d87bede191224e4cb51cc691f164c718e631',  # work Mac, from the personal Mac's app
+    '2f3bbdd402bfd8bc501cf133315659a27f1a9a76e9b31c280197660ce311ce73',  # personal Mac, where it was built
 )
 CEF_CODEC_ARCHIVE = Path.home() / 'cef-build' / f'cef-{CEF_CODEC_VERSION}-codecs-framework.tar.bz2'
 
