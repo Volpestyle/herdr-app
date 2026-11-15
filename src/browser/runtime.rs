@@ -113,6 +113,12 @@ wrap_app! {
             line.append_switch(Some(&"disable-chrome-login-prompt".into()));
             if super::cdp::reserved() {
                 line.append_switch(Some(&"remote-debugging-pipe".into()));
+                // The pipe alone makes every page report navigator.webdriver, so
+                // Cloudflare loops its human check on the person's own browsing.
+                line.append_switch_with_value(
+                    Some(&"disable-blink-features".into()),
+                    Some(&"AutomationControlled".into()),
+                );
             }
         }
     }

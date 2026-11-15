@@ -43,7 +43,11 @@ Screenshots capture the page, not the screen, and stay under the app home's
 port: Herdr reserves fds 3/4 at startup, launches Chromium with
 `--remote-debugging-pipe` (close-on-exec, so nothing the app spawns inherits
 the pipe), and serves a WebSocket on 127.0.0.1 only after the
-first `browser.cdp`. The path carries a 256-bit random per-launch token that the
+first `browser.cdp`. That switch alone would make every page in every profile
+report `navigator.webdriver`, which loops Cloudflare's human check on the
+person's own browsing, so Chromium also starts with
+`--disable-blink-features=AutomationControlled`; the flag is per process, so
+agent panes do not report it either. The path carries a 256-bit random per-launch token that the
 command returns over the control socket, so the endpoint has the socket's trust
 line. Upgrades with any `Origin` (web pages) or a non-loopback `Host` (DNS
 rebinding) are refused even with the token. Each client gets its own browser

@@ -20,6 +20,7 @@ try {
   await page.getByLabel('Name').press('Enter');
   report.submitted = await page.locator('#result').textContent();
   report.evaluated = await page.evaluate(() => document.title);
+  report.webdriver = await page.evaluate(() => navigator.webdriver);
   const consoleSeen = page.waitForEvent('console');
   await page.evaluate(() => console.log('hello from the page'));
   report.console = (await consoleSeen).text();
