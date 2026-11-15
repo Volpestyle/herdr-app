@@ -261,7 +261,7 @@ class BrowserBundleTests(unittest.TestCase):
         with tarfile.open(archive, 'w:bz2') as tar:
             tar.add(build / updater.CEF_FRAMEWORK, arcname=updater.CEF_FRAMEWORK)
         for name, value in [('CEF_CODEC_ARCHIVE', archive), ('CEF_CODEC_VERSION', '156.0.15'),
-                            ('CEF_CODEC_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())]:
+                            ('CEF_CODEC_SHA256', ('0' * 64, hashlib.sha256(archive.read_bytes()).hexdigest()))]:
             pinned = patch.object(updater, name, value); pinned.start(); self.addCleanup(pinned.stop)
         return archive
 
@@ -289,7 +289,7 @@ class BrowserBundleTests(unittest.TestCase):
 
     def test_the_pinned_cef_gets_the_codec_framework(self):
         self.pin_archive()
-        self.assertEqual(self.package(), {'h264': True, 'cef': '156.0.15', 'sha256': updater.CEF_CODEC_SHA256})
+        self.assertEqual(self.package(), {'h264': True, 'cef': '156.0.15', 'sha256': updater.CEF_CODEC_SHA256[1]})
         self.assertEqual(self.packaged_binary(), b'codec')
         self.assertEqual(list((self.bundle / 'Contents/Frameworks').rglob('._*')), [])
         self.assertEqual(len(self.signed), 1)

@@ -39,14 +39,18 @@ UPDATE_COMMAND = 'herdr-browser-update check --force'
 LABEL = 'dev.james.herdr-browser-updater'
 FEATURE_PATHS = ['Cargo.toml', 'src/main.rs', 'src/window.rs', 'src/commands.rs', 'src/mods.rs',
                  'src/browser.rs', 'src/browser', 'src/control.rs', 'src/terminal.rs', 'src/vt.rs', 'src/hc.rs', 'src/SKILL.md', 'defaults/AGENTS.md',
-                 'defaults/mods/new-menu', 'defaults/mods/native-browser',
+                 'defaults/mods/new-menu', 'defaults/mods/native-browser', 'defaults/mods/files', 'defaults/mods/spaces',
                  'defaults/keys.macos.json',
                  'licenses/CEF.txt', 'licenses/inventory.json']
-# Stock CEF has no H.264/AAC. This archive is the framework rebuilt locally with
-# proprietary codecs, for this Mac only: nothing fetches, uploads or hosts it.
+# Stock CEF has no H.264/AAC. This archive is the framework rebuilt on James's
+# personal Mac with proprietary codecs; nothing fetches, uploads or hosts it.
+# Each of his Macs archives that one framework itself, so each has its own digest.
 CEF_FRAMEWORK = 'Chromium Embedded Framework.framework'
 CEF_CODEC_VERSION = '156.0.26'
-CEF_CODEC_SHA256 = 'e2d7252fd07302d8e8447e0c35f7d25b63c59675224e8106ee9f278eaa2684ae'
+CEF_CODEC_SHA256 = (
+    'e2d7252fd07302d8e8447e0c35f7d25b63c59675224e8106ee9f278eaa2684ae',  # personal Mac, where it was built
+    'e456f327b8d256852fcae6ab8b26d87bede191224e4cb51cc691f164c718e631',  # work Mac, from the personal Mac's app
+)
 CEF_CODEC_ARCHIVE = Path.home() / 'cef-build' / f'cef-{CEF_CODEC_VERSION}-codecs-framework.tar.bz2'
 
 
@@ -268,8 +272,8 @@ def install_cef_framework(stock, frameworks):
     except FileNotFoundError:
         raise RuntimeError(f'Missing the CEF {version} codec framework: {CEF_CODEC_ARCHIVE}') from None
     digest = hashlib.sha256(archive).hexdigest()
-    if digest != CEF_CODEC_SHA256:
-        raise RuntimeError(f'{CEF_CODEC_ARCHIVE}: sha256 {digest} is not the pinned {CEF_CODEC_SHA256}')
+    if digest not in CEF_CODEC_SHA256:
+        raise RuntimeError(f'{CEF_CODEC_ARCHIVE}: sha256 {digest} is not the pinned {" or ".join(CEF_CODEC_SHA256)}')
     with tarfile.open(fileobj=io.BytesIO(archive), mode='r:bz2') as tar:
         # macOS tar stores xattrs as AppleDouble ._ entries; on disk they fail codesign --deep.
         tar.extractall(frameworks, members=[m for m in tar if not Path(m.name).name.startswith('._')])

@@ -92,9 +92,13 @@ Packaging reads the CEF version of the stock framework the build linked against:
 To restore H.264 after CEF moves, rebuild the framework for the new CEF, update
 `CEF_CODEC_VERSION` and `CEF_CODEC_SHA256`, then run `herdr-browser-update check
 --force`. The forced run is needed there and on the first install of this pin: an
-unchanged Herdr version, patch and CEF is otherwise already up to date. Another
-Mac has no archive, so its builds fail at the pinned CEF; it takes the signed app
-from this Mac instead ([moving to another Mac](ANOTHER-MAC.md)).
+unchanged Herdr version, patch and CEF is otherwise already up to date. A Mac
+without the archive fails its builds at the pinned CEF. To give it codecs, copy
+the signed app from the personal Mac ([moving to another Mac](ANOTHER-MAC.md)),
+archive that app's framework into its `~/cef-build/` with
+`COPYFILE_DISABLE=1 tar -cjf ~/cef-build/cef-<version>-codecs-framework.tar.bz2 "Chromium Embedded Framework.framework"`
+(run in the app's `Contents/Frameworks`), and add that archive's sha256 to
+`CEF_CODEC_SHA256`; each Mac's archive keeps its own digest.
 
 The staged build installs once Herdr Browser closes. Updates retain the previous
 bundle for rollback and never quit the working app themselves. Patch conflicts,
