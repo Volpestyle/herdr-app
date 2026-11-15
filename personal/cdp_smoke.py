@@ -172,6 +172,9 @@ def main():
         assert report['clicked'] == 'Clicked safely', report
         assert report['submitted'] == 'Submitted: Playwright', report
         assert report['console'] == 'hello from the page' and report['response'] == 200, report
+        # The reserved pipe must not mark pages as automated: the flag is per
+        # process, so it would loop Cloudflare's human check in person panes too.
+        assert report['webdriver'] is False, report
         assert 'profile_marker=agent-only' in report['cookies'], report
         assert 'pw_added=agent-write' in report['cookies'], report
         assert 'Herdr blocks' in report['clearCookies'], report
