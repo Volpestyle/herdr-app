@@ -179,6 +179,30 @@ wrap_focus_handler! {
         fn on_set_focus(&self, _browser: Option<&mut Browser>, _source: FocusSource) -> i32 { (!self.gate.load(Ordering::Relaxed)) as i32 }
     }
 }
+wrap_keyboard_handler! {
+    struct Keys;
+    impl KeyboardHandler {
+        // Edit shortcuts the page left unhandled. AppKit would hand them to
+        // GPUI's menu, so the event monitor sends them to the page directly.
+        fn on_key_event(&self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: *mut u8) -> i32 {
+            use sys::cef_event_flags_t as Flag;
+            let Some(event) = event else { return 0 };
+            let held = |flag: Flag| event.modifiers & flag.0 != 0;
+            if event.type_ != KeyEventType::RAWKEYDOWN || !held(Flag::EVENTFLAG_COMMAND_DOWN) || held(Flag::EVENTFLAG_CONTROL_DOWN) || held(Flag::EVENTFLAG_ALT_DOWN) { return 0; }
+            let Some(frame) = browser.and_then(|b| b.focused_frame()) else { return 0 };
+            match (event.windows_key_code, held(Flag::EVENTFLAG_SHIFT_DOWN)) {
+                (67, false) => frame.copy(),
+                (86, false) => frame.paste(),
+                (88, false) => frame.cut(),
+                (65, false) => frame.select_all(),
+                (90, false) => frame.undo(),
+                (90, true) => frame.redo(),
+                _ => return 0,
+            }
+            1
+        }
+    }
+}
 wrap_download_handler! {
     // A person sees Chromium's save dialog; agent downloads save to the app home.
     struct Download { tx: Tx, ask: bool }
@@ -215,6 +239,7 @@ wrap_client! {
         fn request_handler(&self) -> Option<RequestHandler> { Some(Navigation::new(Some(self.tx.clone()))) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(Life::new(self.tx.clone(), self.browser.clone(), self.closing.clone(), self.pending.clone())) }
         fn focus_handler(&self) -> Option<FocusHandler> { Some(Focus::new(self.gate.clone())) }
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(Keys::new()) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(Download::new(self.tx.clone(), self.ask)) }
     }
 }
@@ -467,7 +492,6 @@ impl Host {
                 }
             })
         });
-        let weak = Rc::downgrade(&browser);
         let event_allowed = allowed.clone();
         let event_container = container.clone();
         let event_parent = parent.clone();
@@ -476,6 +500,12 @@ impl Host {
             let e = unsafe { event.as_ref() };
             if e.windowNumber() != event_window.windowNumber() {
                 return event.as_ptr();
+            }
+            // Chromium replaces a page's view on a cross-site navigation; if it
+            // held the keyboard, AppKit leaves it with the window and typed text
+            // reaches neither the page nor GPUI.
+            if e.r#type() == objc2_app_kit::NSEventType::KeyDown && !focused(&event_parent, &event_window) {
+                event_window.makeFirstResponder(Some(&event_parent));
             }
             if !event_allowed.get() {
                 if e.r#type() == objc2_app_kit::NSEventType::KeyDown && focused(&event_container, &event_window) {
@@ -539,19 +569,13 @@ impl Host {
             if option {
                 return event.as_ptr();
             }
-            if let Some(cell) = weak.upgrade() {
-                if let Some(frame) = cell.borrow().as_ref().and_then(|b| b.focused_frame()) {
-                    match (key.as_str(), shift) {
-                        ("c", false) => frame.copy(),
-                        ("v", false) => frame.paste(),
-                        ("x", false) => frame.cut(),
-                        ("a", false) => frame.select_all(),
-                        ("z", false) => frame.undo(),
-                        ("z", true) => frame.redo(),
-                        _ => return event.as_ptr(),
-                    }
-                    return std::ptr::null_mut();
-                }
+            // The page sees the edit shortcuts first (Linear copies an issue on
+            // Cmd+C); Keys runs the command for the ones it leaves unhandled.
+            if matches!((key.as_str(), shift), ("c" | "v" | "x" | "a" | "z", false) | ("z", true))
+                && let Some(responder) = event_window.firstResponder()
+            {
+                responder.keyDown(e);
+                return std::ptr::null_mut();
             }
             event.as_ptr()
         });
