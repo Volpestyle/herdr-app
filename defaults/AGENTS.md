@@ -743,6 +743,10 @@ What's about the user, never a look:
 - `agent_cursor`: `"cute"` gives the arrow that browser clicks glide over the page
   a face (default: a plain arrow). Each calling terminal gets its own cursor
   color, so different agents are told apart. Applies to panes opened afterwards.
+- `links`: `"system"` sends followed links (Cmd/Ctrl-click in a terminal, a
+  link in a file preview, a page a program opens through `$BROWSER`) to the
+  default browser instead of a Herdr browser tab. `browser.open` still opens
+  here. Also in Settings, Look. Applies immediately.
 - `pane_scrollbars`: `false` hides the scroll position thumb at a terminal
   pane's right edge (default `true`). It shows only when the pane has
   scrollback — never on the alternate screen (editors, pagers) — and

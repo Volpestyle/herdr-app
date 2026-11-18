@@ -1,7 +1,7 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, appHome } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -135,7 +135,8 @@ export default class Files extends View {
 
   // Markdown links: web pages open in a browser tab, relative files in this panel.
   link(url, cx) {
-    if (/^https?:/i.test(url)) return run("browser.open", { url });
+    if (/^https?:/i.test(url)) return readTextFile(`${appHome()}/settings.json`).then(text => JSON.parse(text || "{}").links, () => null)
+      .then(links => links === "system" ? exec("open", [url]) : run("browser.open", { url }));
     if (/^[a-z][a-z0-9+.-]*:/i.test(url) || !url.split("#")[0]) return;
     const out = [];
     for (const part of [...this.file.split("/").slice(0, -1), ...url.split("#")[0].split("/")])

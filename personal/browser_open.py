@@ -2,15 +2,23 @@
 """Open webpages in Herdr Browser, starting the macOS app when needed."""
 from pathlib import Path
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
 
 
-def open_urls(urls, *, launcher=None, app=None, timeout=15):
+def open_urls(urls, *, launcher=None, app=None, timeout=15, settings=None):
     if not urls:
         raise ValueError('Usage: herdr-browser-open <url> [url ...]')
+    try:
+        system = settings and json.loads(Path(settings).read_text()).get('links') == 'system'
+    except (OSError, ValueError, AttributeError):
+        system = False
+    if system:
+        subprocess.run(['/usr/bin/open', '--', *urls], check=True)
+        return
     launcher = str(launcher or Path.home() / '.local/bin/herdr-browser')
     app = str(app or Path.home() / 'Applications/Herdr Browser.app')
 
@@ -46,7 +54,8 @@ if __name__ == '__main__':
     parser.add_argument('urls', nargs='+')
     args = parser.parse_args()
     try:
-        open_urls(args.urls, launcher=args.launcher, app=args.app)
+        home = Path(os.environ.get('HERDR_APP_HOME') or Path.home() / '.config/herdr-app-browser')
+        open_urls(args.urls, launcher=args.launcher, app=args.app, settings=home / 'settings.json')
     except (ValueError, RuntimeError, subprocess.SubprocessError, OSError) as error:
         print(f'herdr-browser-open: {error}', file=sys.stderr)
         raise SystemExit(1)

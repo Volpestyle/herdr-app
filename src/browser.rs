@@ -35,6 +35,14 @@ pub fn is_page_command(name: &str) -> bool {
 
 pub const MOD: &str = "native-browser";
 
+/// Whether followed links open here: settings.json `links: "system"` sends them to the default browser.
+pub fn opens_links() -> bool {
+    !std::fs::read_to_string(crate::settings::path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|v| v["links"] == "system")
+}
+
 #[derive(Debug)]
 pub enum Event {
     Ready,

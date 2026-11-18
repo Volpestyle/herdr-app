@@ -2264,7 +2264,7 @@ impl Render for TerminalView {
                     && let Some((target, _)) = this.link_at(ev.position)
                 {
                     match target {
-                        LinkTarget::External(links::Target::Url(url)) if url.starts_with("http://") || url.starts_with("https://") => {
+                        LinkTarget::External(links::Target::Url(url)) if (url.starts_with("http://") || url.starts_with("https://")) && crate::browser::opens_links() => {
                             cx.emit(TerminalEvent::Browse { url, beside: ev.modifiers.shift })
                         }
                         LinkTarget::External(target) => links::open(&target),

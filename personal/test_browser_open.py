@@ -22,6 +22,14 @@ class BrowserOpenTests(unittest.TestCase):
         self.assertIn(['/usr/bin/open', '/test/Herdr Browser.app'], calls)
         self.assertEqual(calls[-2:], [['/test/bin/herdr-browser', 'do', 'browser.open', '--url', url] for url in urls])
 
+    def test_links_set_to_system_go_to_the_default_browser(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Path(temp) / 'settings.json'; settings.write_text('{"links": "system"}')
+            with patch.object(opener.subprocess, 'run', side_effect=lambda args, **kw: calls.append(args)):
+                opener.open_urls(['https://example.test/'], launcher='/test/bin/herdr-browser', settings=settings)
+        self.assertEqual(calls, [['/usr/bin/open', '--', 'https://example.test/']])
+
     def test_unavailable_app_reports_failure_without_opening_an_external_browser(self):
         calls = []
         def run(args, **kwargs):
