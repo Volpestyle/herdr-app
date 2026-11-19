@@ -5,7 +5,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, shared, setShared } from "herdr";
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 function place(s) {
@@ -19,6 +19,15 @@ async function checkout(folder, on) {
   const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: folder, on });
   if (top.code !== 0 || common.code !== 0) return null;
   return common.stdout.trim() === `${top.stdout.trim()}/.git` ? "main" : "linked";
+}
+
+// Pinned tabs come first in their space and show icon-only in the tab strip (shared "tabs.pinned": tab ids).
+function pin({ id, space }) {
+  const was = shared("tabs.pinned") ?? [];
+  const now = was.includes(id) ? was.filter((x) => x !== id) : [...was, id];
+  setShared("tabs.pinned", now);
+  const tabs = spaces().find((s) => s.id === space)?.tabs ?? [];
+  run("tab.move", { id, index: tabs.filter((c) => c.id !== id && now.includes(c.id)).length + 1 });
 }
 
 function items(p, git) {
@@ -57,6 +66,7 @@ function items(p, git) {
     case "tab":
       return [
         ["Rename", "tab.rename", { id: tg.id }],
+        [(shared("tabs.pinned") ?? []).includes(tg.id) ? "Unpin" : "Pin", "pin", { id: tg.id, space: tg.space }],
         ["New tab", "tab.new", { space: tg.space }],
         ["Close", "tab.close", { id: tg.id }],
       ];
@@ -80,7 +90,7 @@ function items(p, git) {
 }
 
 function menuIcon(command) {
-  const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
+  const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command === "pin" ? "pin" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
   return `mods/workspace-chrome/${name}.svg`;
 }
 
@@ -113,6 +123,7 @@ export default class Menu extends View {
     if (!it) return;
     closeOverlay(props()?.overlay);
     if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
+    else if (it[1] === "pin") pin(it[2]);
     else run(it[1], it[2]);
   }
 
